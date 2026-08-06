@@ -9,7 +9,7 @@ Current development branch: `codex/connlens-start`
 
 Bundled alpha providers: AWS, Azure, Cloudflare, Docker, GitHub, GitLab, Google Cloud, Neon DB, Netlify, npm, Sentry, Shopify, Stripe, Supabase, and Vercel.
 
-Vercel detection now includes linked local projects from `.vercel/project.json` as well as token/config candidates. MCP and Claude/Cursor MCP sources are retired from the built-in catalog; use Custom Sources only for unusual non-built-in local files that should be treated as ordinary token/config providers.
+Vercel and Neon DB token/config detection prefer connected account labels such as email, username, team, or account ID when those fields are present. Vercel linked-project detection is limited to explicitly configured project roots via `$PROJECT_ROOTS/.vercel/project.json`; random project folders under the user profile are not scanned as Vercel accounts. MCP and Claude/Cursor MCP sources are retired from the built-in catalog; use Custom Sources only for unusual non-built-in local files that should be treated as ordinary token/config providers.
 
 The UI includes brand marks for the common developer apps, a popular-provider strip, search/grouping, custom sources, a draggable titlebar, and an X button that hides the popover back to tray. The previous Hide/Show action is intentionally removed.
 

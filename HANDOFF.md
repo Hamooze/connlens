@@ -26,7 +26,7 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 - Added Tauri IPC commands, tray/menu scaffolding, release CLI commands, and the React popover/settings UI.
 - Reworked the UI into the dark compact desktop-tool style from the requested reference, including provider logos, a popular-provider rail, draggable titlebar, and X close button.
 - Removed the user-facing Hide feature and retired MCP/Claude provider IDs so existing saved rows are hidden and pruned on scan.
-- Added Vercel linked-project scanning for `.vercel/project.json` with project/org IDs fingerprinted before storage.
+- Added Vercel linked-project scanning for explicitly configured project roots only; regular Vercel and Neon DB token/config rows prefer connected user, team, or account labels when available.
 - Replaced the settings Provider List with Custom Sources, removed the filter button, made watcher health dot-only, made scan status passive footer text, added a Delete row action, and made dashboard/source actions open the target.
 - Added a Settings Start on startup toggle and enabled the tray Launch at startup menu item against the same native autostart state.
 - Added docs, ADRs, security notes, traceability, manual tasks, and visual evidence under `docs\ivw`.

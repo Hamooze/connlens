@@ -102,3 +102,10 @@ Prompt: Add a start on startup option.
 Change: Added a Settings Start on startup toggle, wired `Settings.autostart` through the Tauri autostart plugin before saving, synchronized GUI snapshots from OS autostart status, and enabled the tray Launch at startup menu item.
 Files touched: `src\App.tsx`, `src-tauri\src\commands.rs`, `src-tauri\src\lib.rs`, `src-tauri\src\registry.rs`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, `cd src-tauri; cargo check`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, Browser rendered Settings interaction check, screenshot capture, and `npm run tauri build`.
+
+## 2026-08-07 02:04 - Vercel and Neon account labels
+
+Prompt: For Neon DB and Vercel, show the connected user/account instead of projects unless a project is manually added by CLI.
+Change: Updated token/config parsing to prefer nested email, username, team, or account labels for account rows; limited bundled Vercel project-link scanning to explicit project roots only; refreshed sanitized Neon/Vercel fixtures and dev UI labels.
+Files touched: `src-tauri\resources\providers\vercel.toml`, `src-tauri\src\scan\strategies.rs`, `src-tauri\src\descriptors.rs`, `tests\fixtures\home\.vercel\auth.json`, `tests\fixtures\home\.neon\credentials.json`, `src\lib\api.ts`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo check`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, descriptor grep for Vercel project-link paths, Browser rendered list check, screenshot capture, `npm run tauri build`, and release relaunch.

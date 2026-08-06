@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-07 01:44 +03:00
+Last audit: 2026-08-07 02:04 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,10 +11,21 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Added a Settings Start on startup toggle wired to Tauri autostart state, and enabled the tray Launch at startup item.
+Changed Vercel and Neon DB detection to prefer connected account/user labels, and limited Vercel linked-project rows to explicit project roots.
 
 ## Verification
 
+- `npm test` passed: 1 file, 2 tests.
+- `npm run build` passed.
+- `cd src-tauri; cargo check` passed.
+- `cd src-tauri; cargo test` passed: 19 tests.
+- `cd src-tauri; cargo clippy -- -D warnings` passed.
+- `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1` passed.
+- Descriptor grep confirmed bundled Vercel project-link scanning only uses `$PROJECT_ROOTS/.vercel/project.json`; no broad `%USERPROFILE%` project globs remain.
+- Browser rendered list check passed for Vercel and Neon DB account labels: `vercel.user@example.test` and `neon.user@example.test` rendered, no project-style row was present, and there were no console warnings/errors.
+- Browser screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-vercel-neon-account-labels-filtered.png`.
+- `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.
+- ConnLens was relaunched from the refreshed release executable as PID `2104`.
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
 - `cd src-tauri; cargo check` passed after wiring native autostart commands.

@@ -222,4 +222,24 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(unique.len(), descriptors.len());
     }
+
+    #[test]
+    fn vercel_project_links_require_explicit_project_roots() {
+        let (descriptors, errors) = load_all(Path::new("missing-home"));
+        assert!(errors.is_empty());
+        let vercel = descriptors
+            .iter()
+            .find(|descriptor| descriptor.id == "vercel")
+            .unwrap();
+        let project_locations = vercel
+            .locations
+            .iter()
+            .filter(|location| location.strategy == "vercel_project")
+            .collect::<Vec<_>>();
+        assert_eq!(project_locations.len(), 1);
+        assert_eq!(
+            project_locations[0].path,
+            "$PROJECT_ROOTS/.vercel/project.json"
+        );
+    }
 }

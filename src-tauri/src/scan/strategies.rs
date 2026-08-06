@@ -130,6 +130,41 @@ pub mod github {
 pub mod tokens {
     use super::*;
 
+    const IDENTITY_KEYS: &[&str] = &[
+        "email",
+        "username",
+        "login",
+        "displayName",
+        "display_name",
+        "name",
+        "user",
+        "account",
+        "accountName",
+        "account_name",
+        "team",
+        "teamSlug",
+        "team_slug",
+        "currentTeam",
+        "current_team",
+        "accountId",
+        "account_id",
+    ];
+
+    const SCOPE_KEYS: &[&str] = &[
+        "currentTeam",
+        "current_team",
+        "teamId",
+        "team_id",
+        "teamSlug",
+        "team_slug",
+        "orgId",
+        "org_id",
+        "accountId",
+        "account_id",
+        "tenantId",
+        "tenant_id",
+    ];
+
     pub fn token_file(
         descriptor: &Descriptor,
         location: &Location,
@@ -143,24 +178,9 @@ pub mod tokens {
         let fingerprint = secutil::fingerprint(token.as_bytes());
         let suffix = fingerprint.chars().rev().take(4).collect::<String>();
         let suffix = suffix.chars().rev().collect::<String>();
-        let scope = value
-            .get("currentTeam")
-            .or_else(|| value.get("teamId"))
-            .or_else(|| value.get("team_id"))
-            .or_else(|| value.get("projectId"))
-            .or_else(|| value.get("project_id"))
-            .or_else(|| value.get("accountId"))
-            .or_else(|| value.get("account_id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| location.scope.clone());
-        let label = value
-            .get("email")
-            .or_else(|| value.get("username"))
-            .or_else(|| value.get("user"))
-            .or_else(|| value.get("account"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
+        let scope = first_string_for_keys(value, SCOPE_KEYS).or_else(|| location.scope.clone());
+        let label = first_string_for_keys(value, IDENTITY_KEYS)
+            .or_else(|| scope.clone())
             .unwrap_or_else(|| format!("{} (...{suffix})", descriptor.name));
         let mut meta = BTreeMap::new();
         if let Some(confidence) = &location.confidence {
@@ -179,6 +199,48 @@ pub mod tokens {
 
     fn token_value(value: &Value) -> Option<&str> {
         find_token(value, 0)
+    }
+
+    fn first_string_for_keys(value: &Value, keys: &[&str]) -> Option<String> {
+        find_string_for_keys(value, keys, 0)
+    }
+
+    fn find_string_for_keys(value: &Value, keys: &[&str], depth: u8) -> Option<String> {
+        if depth > 5 {
+            return None;
+        }
+
+        match value {
+            Value::Object(map) => {
+                for key in keys {
+                    if let Some(found) = map
+                        .get(*key)
+                        .and_then(|value| identity_string(value, depth))
+                    {
+                        return Some(found);
+                    }
+                }
+                map.values()
+                    .find_map(|value| find_string_for_keys(value, keys, depth + 1))
+            }
+            Value::Array(values) => values
+                .iter()
+                .find_map(|value| find_string_for_keys(value, keys, depth + 1)),
+            _ => None,
+        }
+    }
+
+    fn identity_string(value: &Value, depth: u8) -> Option<String> {
+        match value {
+            Value::String(text) => {
+                let text = text.trim();
+                (!text.is_empty() && text.len() <= 160).then(|| text.to_string())
+            }
+            Value::Object(_) | Value::Array(_) => {
+                find_string_for_keys(value, IDENTITY_KEYS, depth + 1)
+            }
+            _ => None,
+        }
     }
 
     fn find_token(value: &Value, depth: u8) -> Option<&str> {
@@ -635,7 +697,11 @@ mod tests {
     #[test]
     fn token_file_finds_snake_case_access_tokens() {
         let descriptor = descriptor("neon", "Neon DB");
-        let value = serde_json::json!({"access_token": "napi_secret", "account_id": "acct_1"});
+        let value = serde_json::json!({
+            "access_token": "napi_secret",
+            "account_id": "acct_1",
+            "user": {"email": "neon.user@example.test"}
+        });
         let rows = tokens::token_file(
             &descriptor,
             &Location {
@@ -650,8 +716,35 @@ mod tests {
             &value,
         );
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "neon.user@example.test");
         assert_eq!(rows[0].identity.scope.as_deref(), Some("acct_1"));
         assert!(!format!("{rows:?}").contains("napi_secret"));
+    }
+
+    #[test]
+    fn token_file_uses_team_when_user_label_is_missing() {
+        let descriptor = descriptor("vercel", "Vercel");
+        let value = serde_json::json!({
+            "token": "vercel_secret",
+            "currentTeam": "team_acme"
+        });
+        let rows = tokens::token_file(
+            &descriptor,
+            &Location {
+                path: "auth.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "token_file".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: None,
+            },
+            Path::new("auth.json"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "team_acme");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("team_acme"));
+        assert!(!format!("{rows:?}").contains("vercel_secret"));
     }
 
     #[test]
