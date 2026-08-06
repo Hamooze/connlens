@@ -94,6 +94,12 @@ export const api = {
     return connection.source.path;
   },
 
+  async openExternalUrl(url: string) {
+    if (hasTauri()) return invoke<string>("open_external_url", { url });
+    window.open(url, "_blank", "noopener,noreferrer");
+    return url;
+  },
+
   async addCustomProvider(input: CustomProviderInput) {
     if (hasTauri()) return invoke<ConnLensSnapshot>("add_custom_provider", { input });
     const id = input.id || slugify(input.name);

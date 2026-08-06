@@ -137,6 +137,7 @@ pub fn run() {
             commands::get_state,
             commands::mark_all_seen,
             commands::open_dashboard,
+            commands::open_external_url,
             commands::purge_missing,
             commands::remove,
             commands::rescan,

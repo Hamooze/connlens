@@ -74,3 +74,10 @@ Prompt: Remove the visible provider rail slider while keeping it scrollable, and
 Change: Hid the horizontal provider rail scrollbar, removed its bottom scrollbar padding, and styled content/settings vertical scrollbars with a black track and white thumb.
 Files touched: `src\App.css`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, `npm run tauri build`, Browser DOM/interaction/console scroll-style smoke, and Playwright screenshot capture.
+
+## 2026-08-06 15:52 - Nemu settings footer
+
+Prompt: Add "Powered by Nemu.ae" under Settings with a pressable nemu.ae link and the newest Nemu logo from the local Nemu folder.
+Change: Copied the Nemu brand-kit SVG into public assets, added a compact Settings footer, and routed the nemu.ae link through a validated Tauri external URL opener.
+Files touched: `public\nemu-logo.svg`, `src\App.tsx`, `src\App.css`, `src\lib\api.ts`, `src-tauri\src\commands.rs`, `src-tauri\src\lib.rs`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, Browser DOM/interaction/console footer check, Playwright screenshot capture, and `npm run tauri build`.

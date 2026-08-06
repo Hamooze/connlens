@@ -595,6 +595,23 @@ function SettingsView({ settings }: { settings?: SettingsState }) {
           Reset App Data
         </button>
       </section>
+
+      <div className="powered-by" aria-label="Powered by Nemu.ae">
+        <span>Powered by</span>
+        <a
+          href="https://nemu.ae"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Open Nemu.ae"
+          onClick={(event) => {
+            event.preventDefault();
+            void api.openExternalUrl("https://nemu.ae");
+          }}
+        >
+          <img src="/nemu-logo.svg" alt="" />
+          <span>nemu.ae</span>
+        </a>
+      </div>
     </section>
   );
 }

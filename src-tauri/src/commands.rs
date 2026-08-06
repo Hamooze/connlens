@@ -269,6 +269,23 @@ pub fn reveal_source(id: String) -> CommandResult<String> {
     Ok(path)
 }
 
+#[tauri::command]
+pub fn open_external_url(url: String) -> CommandResult<String> {
+    let parsed = url::Url::parse(&url).map_err(|err| {
+        ErrorPayload::with_detail("url_rejected", "External URL is invalid", err.to_string())
+    })?;
+    if parsed.scheme() != "https" {
+        return Err(ErrorPayload::new(
+            "url_rejected",
+            "External URLs must use https",
+        ));
+    }
+    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|err| {
+        ErrorPayload::with_detail("open_failed", "URL could not be opened", err.to_string())
+    })?;
+    Ok(url)
+}
+
 pub fn update_watcher_state(paused: bool) -> CommandResult<Snapshot> {
     registry::with_registry(|registry| {
         registry.file.settings.watchers_enabled = !paused;
