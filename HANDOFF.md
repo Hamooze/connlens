@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-08-07 01:44 +03:00
+Last updated: 2026-08-07 02:27 +03:00
 Project: Connlens
 Theme: ConnLens dark utility alpha
 Current branch: codex/connlens-start
@@ -17,6 +17,12 @@ ConnLens is a runnable Tauri 2 + React + TypeScript alpha foundation for local d
 
 Release binary: `src-tauri\target\release\connlens.exe`
 Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
+
+## Latest Push
+
+- Latest pushed commit: `671b9e0` (`Dock settings save status`).
+- Release app is rebuilt and running from `src-tauri\target\release\connlens.exe` as PID `17428`.
+- Latest focused checks: `npm test`, `npm run build`, Browser Settings interaction check, and `npm run tauri build`.
 
 ## Major Updates
 
