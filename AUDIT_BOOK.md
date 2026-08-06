@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-07 01:39 +03:00
+Last audit: 2026-08-07 01:44 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,12 +11,19 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Switched the Settings footer to the provided Nemu PNG logo beside the pressable `https://nemu.ae` link.
+Added a Settings Start on startup toggle wired to Tauri autostart state, and enabled the tray Launch at startup item.
 
 ## Verification
 
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
+- `cd src-tauri; cargo check` passed after wiring native autostart commands.
+- `cd src-tauri; cargo test` passed: 17 tests.
+- `cd src-tauri; cargo clippy -- -D warnings` passed.
+- `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1` passed.
+- Browser rendered Settings check passed for the Start on startup row: checkbox toggled from false to true in dev state, toast reported `Saved`, and there were no console warnings/errors.
+- Browser screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-startup-toggle-settings.png`.
+- `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.
 - Browser DOM/interaction/console check passed for the provided Nemu PNG footer logo: the image loaded from `/nemulogo_withouttxt.png` at 28x28, the `https://nemu.ae` link remained actionable, and there were no console warnings/errors.
 - Playwright screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-nemu-provided-png-footer.png`.
 - `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.

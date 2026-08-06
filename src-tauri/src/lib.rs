@@ -9,6 +9,7 @@ pub mod scan;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewWindow};
+use tauri_plugin_autostart::ManagerExt;
 
 fn toggle_popover(app: &AppHandle, tray_position: Option<PhysicalPosition<f64>>) {
     if let Some(window) = app.get_webview_window("popover") {
@@ -64,8 +65,8 @@ fn configure_tray(app: &AppHandle) -> tauri::Result<()> {
         app,
         "autostart",
         "Launch at startup",
-        false,
-        false,
+        true,
+        app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -100,6 +101,10 @@ fn configure_tray(app: &AppHandle) -> tauri::Result<()> {
                 .unwrap_or(false);
                 let _ = commands::update_watcher_state(paused);
             }
+            "autostart" => {
+                let next = !app.autolaunch().is_enabled().unwrap_or(false);
+                let _ = commands::set_autostart(app, next);
+            }
             "quit" => app.exit(0),
             _ => {}
         });
@@ -125,6 +130,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            let _ = commands::sync_autostart_setting(app.handle());
             configure_tray(app.handle())?;
             let _ = commands::rescan_internal(Some(app.handle()), None);
             toggle_popover(app.handle(), None);

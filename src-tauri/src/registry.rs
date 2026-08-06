@@ -506,6 +506,16 @@ pub fn update_settings(patch: Settings) -> Result<Settings, RegistryError> {
     })
 }
 
+pub fn set_autostart_setting(enabled: bool) -> Result<(), RegistryError> {
+    let home = app_home();
+    let mut registry = Registry::load(&home)?;
+    if registry.file.settings.autostart == enabled {
+        return Ok(());
+    }
+    registry.file.settings.autostart = enabled;
+    registry.save()
+}
+
 pub fn reset_app_data() -> Result<(), RegistryError> {
     let home = app_home();
     if home.exists() {

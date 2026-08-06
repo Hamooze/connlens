@@ -13,7 +13,7 @@ Vercel detection now includes linked local projects from `.vercel/project.json` 
 
 The UI includes brand marks for the common developer apps, a popular-provider strip, search/grouping, custom sources, a draggable titlebar, and an X button that hides the popover back to tray. The previous Hide/Show action is intentionally removed.
 
-Custom sources can be added from Settings with a name, optional ID, optional HTTPS dashboard URL, config paths, env vars, and parser format. Custom descriptors are saved under the ConnLens app data `providers` folder.
+Settings includes a Start on startup toggle backed by the Tauri autostart plugin. Custom sources can be added from Settings with a name, optional ID, optional HTTPS dashboard URL, config paths, env vars, and parser format. Custom descriptors are saved under the ConnLens app data `providers` folder.
 
 ## Commands
 
@@ -63,7 +63,7 @@ connlens providers --json
 }
 ```
 
-Mutation, named-pipe, inbox, probes, autostart, and signed installer work are tracked as later Surge 2 items in `MANUAL_TASKS.md` and `docs/ivw/surge-1-alpha-evidence.md`.
+Mutation, named-pipe, inbox, advanced probes, reboot/autostart validation, and signed installer work are tracked as later Surge 2 items in `MANUAL_TASKS.md` and `docs/ivw/surge-1-alpha-evidence.md`.
 
 ## Security Posture
 

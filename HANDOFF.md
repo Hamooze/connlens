@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-08-06 15:27 +03:00
+Last updated: 2026-08-07 01:44 +03:00
 Project: Connlens
 Theme: ConnLens dark utility alpha
 Current branch: codex/connlens-start
@@ -13,7 +13,7 @@ Test commands: `npm test`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clip
 
 ## Current State
 
-ConnLens is a runnable Tauri 2 + React + TypeScript alpha foundation for local developer app connection visibility. It now defaults to a compact dark utility UI, opens near the tray/work-area edge, supports titlebar dragging, and uses an X button to hide the popover back to tray. The app includes registry persistence, expanded provider descriptors, a custom-source provider form, parsers, fixture-backed provider strategies, headless CLI read commands, documentation, and a Windows NSIS installer artifact.
+ConnLens is a runnable Tauri 2 + React + TypeScript alpha foundation for local developer app connection visibility. It now defaults to a compact dark utility UI, opens near the tray/work-area edge, supports titlebar dragging, uses an X button to hide the popover back to tray, and exposes a Settings Start on startup toggle backed by the Tauri autostart plugin. The app includes registry persistence, expanded provider descriptors, a custom-source provider form, parsers, fixture-backed provider strategies, headless CLI read commands, documentation, and a Windows NSIS installer artifact.
 
 Release binary: `src-tauri\target\release\connlens.exe`
 Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
@@ -28,6 +28,7 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 - Removed the user-facing Hide feature and retired MCP/Claude provider IDs so existing saved rows are hidden and pruned on scan.
 - Added Vercel linked-project scanning for `.vercel/project.json` with project/org IDs fingerprinted before storage.
 - Replaced the settings Provider List with Custom Sources, removed the filter button, made watcher health dot-only, made scan status passive footer text, added a Delete row action, and made dashboard/source actions open the target.
+- Added a Settings Start on startup toggle and enabled the tray Launch at startup menu item against the same native autostart state.
 - Added docs, ADRs, security notes, traceability, manual tasks, and visual evidence under `docs\ivw`.
 
 ## Important Decisions
@@ -47,4 +48,4 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 
 ## Known Risks
 
-- Quality gate remains `review`, not `pass`, because real watchers/toasts/tray-position E2E, Credential Manager enumeration, and Windows VM checks are pending.
+- Quality gate remains `review`, not `pass`, because real watchers/toasts/tray-position E2E, Credential Manager enumeration, and Windows VM reboot/autostart checks are pending.

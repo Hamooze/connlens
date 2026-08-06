@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_autostart::ManagerExt;
 
 pub type CommandResult<T> = Result<T, ErrorPayload>;
 
@@ -49,8 +50,8 @@ struct CustomProviderEnvVar {
 }
 
 #[tauri::command]
-pub fn get_state() -> CommandResult<Snapshot> {
-    registry::load_snapshot().map_err(ErrorPayload::from)
+pub fn get_state(app: AppHandle) -> CommandResult<Snapshot> {
+    snapshot_with_autostart(Some(&app))
 }
 
 #[tauri::command]
@@ -72,7 +73,7 @@ pub fn remove(id: String) -> CommandResult<Snapshot> {
     registry::with_registry(|registry| registry.remove(&id))
         .map_err(ErrorPayload::from)?
         .map_err(ErrorPayload::from)?;
-    get_state()
+    snapshot_with_autostart(None)
 }
 
 #[tauri::command]
@@ -83,7 +84,7 @@ pub fn purge_missing() -> CommandResult<usize> {
 #[tauri::command]
 pub fn mark_all_seen() -> CommandResult<Snapshot> {
     registry::with_registry(|registry| registry.mark_all_seen()).map_err(ErrorPayload::from)?;
-    get_state()
+    snapshot_with_autostart(None)
 }
 
 #[tauri::command]
@@ -92,13 +93,14 @@ pub fn dismiss_history_reset_notice() -> CommandResult<Snapshot> {
         registry.file.settings.history_reset_notice_dismissed = true;
     })
     .map_err(ErrorPayload::from)?;
-    get_state()
+    snapshot_with_autostart(None)
 }
 
 #[tauri::command]
-pub fn update_settings(settings: Settings) -> CommandResult<Snapshot> {
+pub fn update_settings(app: AppHandle, settings: Settings) -> CommandResult<Snapshot> {
+    apply_autostart(&app, settings.autostart)?;
     registry::update_settings(settings).map_err(ErrorPayload::from)?;
-    get_state()
+    snapshot_with_autostart(Some(&app))
 }
 
 #[tauri::command]
@@ -166,14 +168,14 @@ pub fn add_custom_provider(input: CustomProviderInput) -> CommandResult<Snapshot
 }
 
 #[tauri::command]
-pub fn reset_app_data() -> CommandResult<Snapshot> {
+pub fn reset_app_data(app: AppHandle) -> CommandResult<Snapshot> {
     registry::reset_app_data().map_err(ErrorPayload::from)?;
-    get_state()
+    snapshot_with_autostart(Some(&app))
 }
 
 #[tauri::command]
 pub fn copy_value(id: String, field: String) -> CommandResult<()> {
-    let snapshot = get_state()?;
+    let snapshot = snapshot_with_autostart(None)?;
     let connection = snapshot
         .connections
         .into_iter()
@@ -203,7 +205,7 @@ pub fn copy_value(id: String, field: String) -> CommandResult<()> {
 
 #[tauri::command]
 pub fn open_dashboard(id: String) -> CommandResult<String> {
-    let snapshot = get_state()?;
+    let snapshot = snapshot_with_autostart(None)?;
     let connection = snapshot
         .connections
         .into_iter()
@@ -244,7 +246,7 @@ pub fn open_dashboard(id: String) -> CommandResult<String> {
 
 #[tauri::command]
 pub fn reveal_source(id: String) -> CommandResult<String> {
-    let snapshot = get_state()?;
+    let snapshot = snapshot_with_autostart(None)?;
     let connection = snapshot
         .connections
         .into_iter()
@@ -291,7 +293,65 @@ pub fn update_watcher_state(paused: bool) -> CommandResult<Snapshot> {
         registry.file.settings.watchers_enabled = !paused;
     })
     .map_err(ErrorPayload::from)?;
-    get_state()
+    snapshot_with_autostart(None)
+}
+
+pub fn sync_autostart_setting(app: &AppHandle) -> CommandResult<()> {
+    let enabled = read_autostart(app)?;
+    registry::set_autostart_setting(enabled).map_err(ErrorPayload::from)
+}
+
+pub fn set_autostart(app: &AppHandle, enabled: bool) -> CommandResult<()> {
+    apply_autostart(app, enabled)?;
+    registry::set_autostart_setting(enabled).map_err(ErrorPayload::from)
+}
+
+fn snapshot_with_autostart(app: Option<&AppHandle>) -> CommandResult<Snapshot> {
+    if let Some(app) = app {
+        sync_autostart_setting(app)?;
+    }
+    registry::load_snapshot().map_err(ErrorPayload::from)
+}
+
+fn read_autostart(app: &AppHandle) -> CommandResult<bool> {
+    app.autolaunch().is_enabled().map_err(|err| {
+        ErrorPayload::with_detail(
+            "autostart_error",
+            "Startup setting could not be read",
+            err.to_string(),
+        )
+    })
+}
+
+fn apply_autostart(app: &AppHandle, enabled: bool) -> CommandResult<()> {
+    let manager = app.autolaunch();
+    let current = manager.is_enabled().map_err(|err| {
+        ErrorPayload::with_detail(
+            "autostart_error",
+            "Startup setting could not be read",
+            err.to_string(),
+        )
+    })?;
+    if current == enabled {
+        return Ok(());
+    }
+
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    result.map_err(|err| {
+        ErrorPayload::with_detail(
+            "autostart_error",
+            if enabled {
+                "ConnLens could not be added to startup"
+            } else {
+                "ConnLens could not be removed from startup"
+            },
+            err.to_string(),
+        )
+    })
 }
 
 fn emit_snapshot(app: Option<&AppHandle>, snapshot: &Snapshot) {

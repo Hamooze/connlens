@@ -95,3 +95,10 @@ Prompt: Use `C:\Users\hamza\Downloads\Nemu\externals\Logo\nemulogo_withouttxt.pn
 Change: Replaced the luminous SVG footer mark with the provided PNG, resized the settings footer logo treatment for the PNG, and removed the old SVG asset.
 Files touched: `public\nemulogo_withouttxt.png`, `public\nemu-mark-luminous.svg`, `src\App.tsx`, `src\App.css`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, Browser DOM/interaction/console footer check, Playwright screenshot capture, and `npm run tauri build`.
+
+## 2026-08-07 01:44 - Startup launch option
+
+Prompt: Add a start on startup option.
+Change: Added a Settings Start on startup toggle, wired `Settings.autostart` through the Tauri autostart plugin before saving, synchronized GUI snapshots from OS autostart status, and enabled the tray Launch at startup menu item.
+Files touched: `src\App.tsx`, `src-tauri\src\commands.rs`, `src-tauri\src\lib.rs`, `src-tauri\src\registry.rs`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo check`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, Browser rendered Settings interaction check, screenshot capture, and `npm run tauri build`.

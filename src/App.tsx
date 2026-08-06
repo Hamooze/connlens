@@ -569,6 +569,11 @@ function SettingsView({ settings }: { settings?: SettingsState }) {
           checked={current.probesEnabled}
           onChange={(checked) => updateSettings({ probesEnabled: checked })}
         />
+        <ToggleRow
+          label="Start on startup"
+          checked={current.autostart}
+          onChange={(checked) => updateSettings({ autostart: checked })}
+        />
         <label className="field-row">
           Poll interval
           <select
