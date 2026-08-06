@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-06 15:27 +03:00
+Last audit: 2026-08-06 15:39 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,12 +11,15 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Retired MCP/Claude provider IDs from the catalog, scanner, UI, fixtures, and saved-state snapshots; added Vercel `.vercel/project.json` linked-project detection with fingerprint-only project/org metadata.
+Changed the footer Rescan control to an icon-only loop button while preserving accessible label/title text.
 
 ## Verification
 
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
+- `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.
+- Browser DOM/interaction/console check passed for icon-only footer Rescan control; the button retained title/aria access and updated scan time without visible footer text.
+- Playwright screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-icon-only-rescan.png`.
 - `cd src-tauri; cargo test` passed: 17 tests.
 - `cd src-tauri; cargo clippy -- -D warnings` passed.
 - `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1` passed.

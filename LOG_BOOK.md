@@ -60,3 +60,10 @@ Change: Removed the bundled Cursor MCP descriptor, retired MCP/Claude provider I
 Files touched: `src\App.tsx`, `src-tauri\src\`, `src-tauri\resources\providers\`, `tests\fixtures\`, `README.md`, `HANDOFF.md`, `AUDIT_BOOK.md`, `LOG_BOOK.md`, `docs\`, `e2e\traceability.md`, `MANUAL_TASKS.md`
 Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, `npm run tauri build`, release CLI `status`, release CLI `providers --json`, Browser DOM/search/console smoke, Playwright screenshot fallback, and source grep for removed MCP catalog entries.
 Notes: Vercel CLI project linking is detected from local `.vercel/project.json` files; raw project/org IDs are not persisted.
+
+## 2026-08-06 15:39 - Icon-only footer rescan
+
+Prompt: Make the footer Rescan control show only the loop icon, not the word.
+Change: Removed visible Rescan text from the footer button, kept aria-label/title, and fixed footer control columns to icon-button widths.
+Files touched: `src\App.tsx`, `src\App.css`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `npm run tauri build`, Browser DOM/interaction/console smoke, and Playwright screenshot capture.

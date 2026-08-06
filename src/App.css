@@ -521,7 +521,7 @@ button {
 
 .footer {
   display: grid;
-  grid-template-columns: minmax(116px, 1fr) 14px auto 32px;
+  grid-template-columns: minmax(116px, 1fr) 14px 32px 32px;
   align-items: center;
   gap: 7px;
   padding: 0 12px;
@@ -529,6 +529,11 @@ button {
   border-top: 1px solid #363636;
   color: #d4d4d4;
   font-size: 11px;
+}
+
+.footer button {
+  width: 32px;
+  padding: 0;
 }
 
 .scan-stamp,

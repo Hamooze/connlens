@@ -486,9 +486,8 @@ function Footer() {
         <time>{formatScanTime(snapshot?.lastScan)}</time>
       </span>
       <span className={`watcher ${health}`} aria-label={healthText} title={healthText} />
-      <button type="button" onClick={() => rescan()}>
+      <button type="button" onClick={() => rescan()} aria-label="Rescan" title="Rescan">
         <RefreshCw size={16} />
-        Rescan
       </button>
       <button type="button" onClick={() => setView("settings")} aria-label="Settings">
         <Settings size={17} />
