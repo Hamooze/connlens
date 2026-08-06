@@ -130,3 +130,10 @@ Prompt: Vercel/Neon profiles were not visible after relaunch; likely stale rows 
 Change: Added `user_id`/`userId` as account-label fallbacks, automatically pruned stale Vercel `project_link` rows when missing, and pruned superseded fingerprint fallback rows when the same source file now has an active account identity.
 Files touched: `src-tauri\src\registry.rs`, `src-tauri\src\scan\strategies.rs`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, post-relaunch registry verification, `npm run tauri build`, and release relaunch.
+
+## 2026-08-07 02:50 - ConnLens desktop icon
+
+Prompt: Identify whether the hotbar icon was custom; if not, use the ConnLens top-left icon in the hotbar.
+Change: Confirmed the previous blue/yellow hotbar icon was the default Tauri icon, added a reproducible ConnLens share-mark SVG source, regenerated the platform icon pack, and rebuilt/relaunched the release executable.
+Files touched: `src-tauri\icon-source.svg`, `src-tauri\icons\*`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm run tauri icon -- src-tauri\icon-source.svg`, 32px icon visual check, `npm run tauri build`, and release relaunch.

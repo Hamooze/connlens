@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-07 02:46 +03:00
+Last audit: 2026-08-07 02:50 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,12 +11,16 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Cleaned profile/account display refresh behavior by pruning stale linked-project rows and superseded fingerprint fallback rows, and using `user_id`/`userId` when no email is available.
+Replaced the default Tauri hotbar/tray/executable icon with the ConnLens share mark.
 
 ## Verification
 
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
+- `npm run tauri icon -- src-tauri\icon-source.svg` passed and regenerated the platform icon pack.
+- 32px icon visual check passed: icon renders as the ConnLens share mark.
+- `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.
+- ConnLens was relaunched from the refreshed release executable as PID `30056`.
 - `cd src-tauri; cargo test` passed: 26 tests.
 - `cd src-tauri; cargo clippy -- -D warnings` passed.
 - `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1` passed.

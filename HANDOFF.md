@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-08-07 02:46 +03:00
+Last updated: 2026-08-07 02:50 +03:00
 Project: Connlens
 Theme: ConnLens dark utility alpha
 Current branch: codex/connlens-start
@@ -20,9 +20,9 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 
 ## Latest Push
 
-- Latest change: profile-row registry cleanup after `32d734f` (`Refresh handoff status`).
-- Release app is rebuilt and running from `src-tauri\target\release\connlens.exe` as PID `8364`.
-- Latest focused checks: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, secret grep, post-relaunch registry verification, and `npm run tauri build`.
+- Latest change: replaced the default Tauri hotbar/tray/executable icon with the ConnLens share mark.
+- Release app is rebuilt and running from `src-tauri\target\release\connlens.exe` as PID `30056`.
+- Latest focused checks: Tauri icon generation from `src-tauri\icon-source.svg`, 32px icon visual check, and `npm run tauri build`.
 
 ## Major Updates
 
@@ -31,6 +31,7 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 - Added GitHub, Vercel, Neon, Shopify, AWS, Azure, Google Cloud, Docker, npm, GitLab, Netlify, Cloudflare, Stripe, Supabase, and Sentry candidate scanning contracts with fingerprint-only secret handling.
 - Added Tauri IPC commands, tray/menu scaffolding, release CLI commands, and the React popover/settings UI.
 - Reworked the UI into the dark compact desktop-tool style from the requested reference, including provider logos, a popular-provider rail, draggable titlebar, and X close button.
+- Replaced the default Tauri app icon with a ConnLens share-mark icon generated from `src-tauri\icon-source.svg`.
 - Removed the user-facing Hide feature and retired MCP/Claude provider IDs so existing saved rows are hidden and pruned on scan.
 - Added account-label auto-detection across token/config/profile rows; Vercel linked-project scanning remains limited to explicitly configured project roots only, while regular access rows prefer connected user, team, org, tenant, AWS SSO account, role, or account labels when available.
 - Added `user_id`/`userId` account-label fallback and automatic cleanup for stale Vercel linked-project rows plus superseded fingerprint fallback rows from the same source file.
