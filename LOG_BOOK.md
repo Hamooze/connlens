@@ -17,3 +17,38 @@ Change: Created private GitHub repository `Hamooze/connlens`, attached it as `or
 Files touched: `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `gh repo create` completed and returned `https://github.com/Hamooze/connlens`.
 Notes: First push is intended for branch `codex/connlens-start`.
+
+## 2026-08-06 14:01 - ConnLens alpha foundation build
+
+Prompt: Build from `C:\Users\hamza\Downloads\connlens-surge-plan_1.md` using `orchstate-full-build`.
+Change: Added a Tauri 2 + React + TypeScript ConnLens alpha with provider descriptors, local registry, parsers, fixture-backed scanners, Tauri IPC commands, headless CLI read commands, compact popover UI, security docs, traceability docs, visual evidence, and NSIS packaging.
+Files touched: `package.json`, `src\`, `src-tauri\`, `tests\`, `docs\`, `e2e\`, `scripts\`, `README.md`, `AGENTS.md`, `MANUAL_TASKS.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, release CLI `status`, `list --json --all`, and `providers --json`.
+Artifacts: `src-tauri\target\release\connlens.exe`; `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`; screenshots in `docs\ivw\visual-popover-390x520.png` and `docs\ivw\visual-popover-760x720.png`.
+Notes: Gate is alpha foundation `review`; full Surge 1 pass remains blocked by real watcher/toast/tray-position E2E, Credential Manager enumeration, and Windows VM/manual checks.
+
+## 2026-08-06 14:44 - Dark utility UI and provider expansion
+
+Prompt: Make the app default dark mode, add popular developer-app logos/providers, remove Hide, add X/drag/tray-position behavior, remove useless Claude Code MCP, and fix Vercel/Neon visibility.
+Change: Reworked the popover into a compact dark desktop utility UI, added provider logos and a popular-provider rail, removed the user-facing Hide action, added titlebar drag and X-close-to-tray behavior, positioned the popover near the tray/work-area edge, expanded bundled providers, corrected Vercel and Neon DB descriptor paths, and removed Claude-specific MCP descriptors.
+Files touched: `src\App.tsx`, `src\App.css`, `src\lib\api.ts`, `src\lib\store.ts`, `src-tauri\src\`, `src-tauri\resources\providers\`, `src-tauri\capabilities\default.json`, `src-tauri\tauri.conf.json`, `tests\`, `package.json`, `docs\ivw\`, `README.md`, `HANDOFF.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `npm run tauri build`, Playwright smoke test, release CLI `status`, release CLI `providers --json`, and `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`.
+Artifacts: `src-tauri\target\release\connlens.exe`; `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`; refreshed screenshots in `docs\ivw\visual-popover-390x520.png` and `docs\ivw\visual-popover-760x720.png`.
+Notes: The Browser skill's in-app browser attach timed out during visual QA, so the smoke test used local Playwright instead.
+
+## 2026-08-06 15:12 - Footer, settings, and row action cleanup
+
+Prompt: Make scan status a passive footer look, make watcher healthy just a green thing, remove the filter button, replace settings providers with custom providers, remove Show, add Delete, and make Reveal Source/Open Dashboard open targets.
+Change: Removed the filter button and Show action, changed footer scan status to passive text, changed watcher health to a dot-only indicator, replaced settings Provider List with a Custom Sources form that writes user descriptors, added a Delete action to expanded rows, and changed Tauri dashboard/source commands to open HTTPS links and local source files through the opener plugin.
+Files touched: `src\App.tsx`, `src\App.css`, `src\lib\api.ts`, `src\lib\store.ts`, `src\lib\types.ts`, `src-tauri\src\commands.rs`, `src-tauri\src\lib.rs`, `README.md`, `HANDOFF.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, Browser DOM/interaction/console checks, and Playwright screenshot smoke.
+Artifacts: Screenshots in `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-request-list-390.png`, `connlens-request-settings-390.png`, and `connlens-request-wide-760.png`.
+Notes: Browser interaction validation worked this pass; its screenshot command was unavailable, so local Playwright was used for screenshot evidence.
+
+## 2026-08-06 15:24 - GitHub publish prep
+
+Prompt: Push live to GitHub and update README/handoff files.
+Change: Added GitHub branch/publish details to `README.md` and `HANDOFF.md`, kept generated Playwright `test-results` out of version control, and prepared the current `codex/connlens-start` branch for push to `Hamooze/connlens`.
+Files touched: `.gitignore`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `gh auth status` confirmed `Hamooze` is authenticated and active; final source/test verification from the previous pass remains current.
+Notes: Branch-first workflow retained; no merge to `main` was performed.

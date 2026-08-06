@@ -1,0 +1,19 @@
+id = "netlify"
+name = "Netlify"
+dashboard_url = "https://app.netlify.com"
+
+[[locations]]
+path = "%APPDATA%/netlify/Config/config.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.config/netlify/config.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[env_vars]]
+name = "NETLIFY_AUTH_TOKEN"
+label = "Netlify token"

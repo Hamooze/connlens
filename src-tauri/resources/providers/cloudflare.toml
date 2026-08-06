@@ -1,0 +1,22 @@
+id = "cloudflare"
+name = "Cloudflare"
+dashboard_url = "https://dash.cloudflare.com"
+
+[[locations]]
+path = "%USERPROFILE%/.wrangler/config/default.toml"
+format = "toml"
+strategy = "token_file"
+source_type = "config_file"
+confidence = "legacy"
+
+[[env_vars]]
+name = "CLOUDFLARE_API_TOKEN"
+label = "Cloudflare API token"
+
+[[env_vars]]
+name = "CF_API_TOKEN"
+label = "Cloudflare API token"
+
+[[env_vars]]
+name = "CF_ACCOUNT_ID"
+label = "Cloudflare account"

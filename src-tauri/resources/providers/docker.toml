@@ -1,0 +1,19 @@
+id = "docker"
+name = "Docker"
+dashboard_url = "https://hub.docker.com"
+
+[[locations]]
+path = "%DOCKER_CONFIG%/config.json"
+format = "json"
+strategy = "docker_auths"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.docker/config.json"
+format = "json"
+strategy = "docker_auths"
+source_type = "config_file"
+
+[[env_vars]]
+name = "DOCKER_HOST"
+label = "Docker host"

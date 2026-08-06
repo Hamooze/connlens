@@ -1,0 +1,19 @@
+id = "npm"
+name = "npm"
+dashboard_url = "https://www.npmjs.com"
+
+[[locations]]
+path = "%USERPROFILE%/.npmrc"
+format = "ini"
+strategy = "npmrc"
+source_type = "config_file"
+
+[[locations]]
+path = "%APPDATA%/npm/etc/npmrc"
+format = "ini"
+strategy = "npmrc"
+source_type = "config_file"
+
+[[env_vars]]
+name = "NPM_TOKEN"
+label = "npm token"

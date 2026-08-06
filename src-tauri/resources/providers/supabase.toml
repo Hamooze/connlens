@@ -1,0 +1,14 @@
+id = "supabase"
+name = "Supabase"
+dashboard_url = "https://supabase.com/dashboard"
+
+[[locations]]
+path = "$PROJECT_ROOTS/supabase/config.toml"
+format = "toml"
+strategy = "profile_file"
+source_type = "config_file"
+confidence = "project"
+
+[[env_vars]]
+name = "SUPABASE_ACCESS_TOKEN"
+label = "Supabase token"

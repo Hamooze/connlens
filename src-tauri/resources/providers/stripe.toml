@@ -1,0 +1,25 @@
+id = "stripe"
+name = "Stripe"
+dashboard_url = "https://dashboard.stripe.com"
+
+[[locations]]
+path = "%XDG_CONFIG_HOME%/stripe/config.toml"
+format = "toml"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%APPDATA%/stripe/config.toml"
+format = "toml"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.config/stripe/config.toml"
+format = "toml"
+strategy = "token_file"
+source_type = "config_file"
+
+[[env_vars]]
+name = "STRIPE_API_KEY"
+label = "Stripe API key"

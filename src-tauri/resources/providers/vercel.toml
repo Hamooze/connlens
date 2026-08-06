@@ -1,0 +1,45 @@
+id = "vercel"
+name = "Vercel"
+dashboard_url = "https://vercel.com"
+
+[[locations]]
+path = "%APPDATA%/com.vercel.cli/auth.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%LOCALAPPDATA%/com.vercel.cli/auth.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.local/share/com.vercel.cli/auth.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.vercel/auth.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%APPDATA%/com.vercel.cli/config.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+confidence = "candidate"
+
+[[locations]]
+path = "%USERPROFILE%/.vercel/config.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+confidence = "candidate"
+
+[[env_vars]]
+name = "VERCEL_TOKEN"
+label = "Vercel token"

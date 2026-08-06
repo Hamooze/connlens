@@ -1,0 +1,26 @@
+id = "github"
+name = "GitHub"
+dashboard_url = "https://github.com/{label}"
+credman_filter = "git:*"
+
+[[locations]]
+path = "%GH_CONFIG_DIR%/hosts.yml"
+format = "yaml"
+strategy = "gh_hosts"
+source_type = "config_file"
+
+[[locations]]
+path = "%APPDATA%/GitHub CLI/hosts.yml"
+format = "yaml"
+strategy = "gh_hosts"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.config/gh/hosts.yml"
+format = "yaml"
+strategy = "gh_hosts"
+source_type = "config_file"
+
+[[env_vars]]
+name = "GITHUB_TOKEN"
+label = "GitHub token"

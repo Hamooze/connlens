@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "Claude Code Global": {
+      "command": "node",
+      "args": ["global-server.js"]
+    }
+  },
+  "projects": {
+    "C:\\Users\\dev\\Projects\\project-alpha": {
+      "mcpServers": {
+        "Project DB": {
+          "command": "node",
+          "args": ["project-db.js"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+id = "sentry"
+name = "Sentry"
+dashboard_url = "https://sentry.io"
+
+[[locations]]
+path = "%USERPROFILE%/.sentryclirc"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+
+[[env_vars]]
+name = "SENTRY_AUTH_TOKEN"
+label = "Sentry token"

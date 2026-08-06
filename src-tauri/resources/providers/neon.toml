@@ -1,0 +1,25 @@
+id = "neon"
+name = "Neon DB"
+dashboard_url = "https://console.neon.tech"
+
+[[locations]]
+path = "%APPDATA%/neonctl/credentials.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.config/neonctl/credentials.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.neon/credentials.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[env_vars]]
+name = "NEON_API_KEY"
+label = "Neon API key"

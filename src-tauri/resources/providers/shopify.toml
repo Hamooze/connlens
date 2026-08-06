@@ -1,0 +1,14 @@
+id = "shopify"
+name = "Shopify"
+dashboard_url = "https://admin.shopify.com"
+
+[[locations]]
+path = "%USERPROFILE%/.config/shopify/config.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+confidence = "candidate"
+
+[[env_vars]]
+name = "SHOPIFY_CLI_AUTH_TOKEN"
+label = "Shopify CLI token"

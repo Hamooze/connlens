@@ -1,0 +1,25 @@
+id = "gitlab"
+name = "GitLab"
+dashboard_url = "https://gitlab.com"
+
+[[locations]]
+path = "%GLAB_CONFIG_DIR%/config.yml"
+format = "yaml"
+strategy = "glab_config"
+source_type = "config_file"
+
+[[locations]]
+path = "%APPDATA%/glab-cli/config.yml"
+format = "yaml"
+strategy = "glab_config"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.config/glab-cli/config.yml"
+format = "yaml"
+strategy = "glab_config"
+source_type = "config_file"
+
+[[env_vars]]
+name = "GITLAB_TOKEN"
+label = "GitLab token"

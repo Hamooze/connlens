@@ -1,0 +1,41 @@
+id = "aws"
+name = "AWS"
+dashboard_url = "https://console.aws.amazon.com"
+
+[[locations]]
+path = "%AWS_SHARED_CREDENTIALS_FILE%"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+scope = "credentials"
+
+[[locations]]
+path = "%USERPROFILE%/.aws/credentials"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+scope = "credentials"
+
+[[locations]]
+path = "%AWS_CONFIG_FILE%"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+scope = "config"
+confidence = "candidate"
+
+[[locations]]
+path = "%USERPROFILE%/.aws/config"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+scope = "config"
+confidence = "candidate"
+
+[[env_vars]]
+name = "AWS_ACCESS_KEY_ID"
+label = "AWS access key"
+
+[[env_vars]]
+name = "AWS_PROFILE"
+label = "AWS profile"

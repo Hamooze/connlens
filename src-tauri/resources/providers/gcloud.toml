@@ -1,0 +1,37 @@
+id = "gcloud"
+name = "Google Cloud"
+dashboard_url = "https://console.cloud.google.com"
+
+[[locations]]
+path = "%CLOUDSDK_CONFIG%/configurations/config_*"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%APPDATA%/gcloud/configurations/config_*"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.config/gcloud/configurations/config_*"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%APPDATA%/gcloud/application_default_credentials.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.config/gcloud/application_default_credentials.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
+[[env_vars]]
+name = "GOOGLE_APPLICATION_CREDENTIALS"
+label = "Google credentials file"

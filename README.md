@@ -1,0 +1,70 @@
+# ConnLens
+
+ConnLens is a local-only Windows tray utility for seeing CLI and MCP connections on a developer machine. It defaults to a compact dark popover, scans local configuration files, stores metadata in `%LOCALAPPDATA%\ConnLens\registry.json` or `CONNLENS_HOME`, and never persists raw secret values.
+
+GitHub: `https://github.com/Hamooze/connlens`
+Current development branch: `codex/connlens-start`
+
+## Providers
+
+Bundled alpha providers: AWS, Azure, Cloudflare, Docker, GitHub, GitLab, Google Cloud, Cursor MCP, Neon DB, Netlify, npm, Sentry, Shopify, Stripe, Supabase, and Vercel.
+
+The UI includes brand marks for the common developer apps, a popular-provider strip, search/grouping, custom sources, a draggable titlebar, and an X button that hides the popover back to tray. The previous Hide/Show action is intentionally removed.
+
+Custom sources can be added from Settings with a name, optional ID, optional HTTPS dashboard URL, config paths, env vars, and parser format. Custom descriptors are saved under the ConnLens app data `providers` folder.
+
+## Commands
+
+```powershell
+npm install
+npm run dev
+npm test
+npm run build
+npm run tauri dev
+npm run tauri build
+cd src-tauri; cargo test
+powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1
+```
+
+Windows installer artifact:
+
+```powershell
+src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe
+```
+
+Fixture scan setup for local verification:
+
+```powershell
+$env:CONNLENS_HOME = "$PWD\tests\fixtures\home"
+$env:APPDATA = "$PWD\tests\fixtures\home\appdata"
+$env:USERPROFILE = "$PWD\tests\fixtures\home"
+npm run tauri dev
+```
+
+## Agent Read Contract
+
+The low-cost Surge 2 read path is available through the same executable:
+
+```powershell
+connlens list --json
+connlens list --provider github --all
+connlens status
+connlens providers --json
+```
+
+`list --json` returns:
+
+```json
+{
+  "schemaVersion": 1,
+  "connections": []
+}
+```
+
+Mutation, named-pipe, inbox, probes, autostart, and signed installer work are tracked as later Surge 2 items in `MANUAL_TASKS.md` and `docs/ivw/surge-1-alpha-evidence.md`.
+
+## Security Posture
+
+- Local-only: no network calls, no accounts, no telemetry.
+- Secrets are fingerprinted with `sha256:xxxxxxxx`; raw fixture token grep is enforced by `scripts/secret_grep.ps1`.
+- Credential Manager support is names/usernames only in the current contract; real-machine verification remains a manual task.
