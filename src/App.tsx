@@ -156,10 +156,13 @@ function App() {
           <Footer />
         </>
       ) : (
-        <SettingsView settings={snapshot?.settings} />
+        <>
+          <SettingsView settings={snapshot?.settings} />
+          <SettingsFooter />
+        </>
       )}
 
-      {toast ? (
+      {view === "list" && toast ? (
         <button className="toast" type="button" onClick={() => setToast(null)}>
           {toast}
         </button>
@@ -492,6 +495,15 @@ function Footer() {
       <button type="button" onClick={() => setView("settings")} aria-label="Settings">
         <Settings size={17} />
       </button>
+    </footer>
+  );
+}
+
+function SettingsFooter() {
+  const toast = useConnLensStore((state) => state.toast);
+  return (
+    <footer className="settings-footer" aria-live="polite">
+      {toast ? <span className="settings-save-status">{toast}</span> : null}
     </footer>
   );
 }

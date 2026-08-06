@@ -116,3 +116,10 @@ Prompt: Apply the same account-name-not-projects behavior to AWS and other acces
 Change: Added shared local-config account label detection for token/profile strategies; profile rows now prefer email/user/org/team/account/AWS SSO/role labels, project IDs stay contextual unless the descriptor uses explicit project-link/project-root scanning, and dev fixture rows reflect account-style labels.
 Files touched: `src-tauri\src\scan\strategies.rs`, `src\lib\api.ts`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, `cd src-tauri; cargo check`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, Browser rendered list check, screenshot capture, `npm run tauri build`, and release relaunch.
+
+## 2026-08-07 02:23 - Settings save status footer
+
+Prompt: Fix the location of the `Saved` status and make it say `Save`.
+Change: Moved the settings save status into a dedicated bottom settings footer, kept the scrollable settings content above it, and changed the settings update toast text from `Saved` to `Save`.
+Files touched: `src\App.tsx`, `src\App.css`, `src\lib\store.ts`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, Browser rendered Settings interaction check, screenshot capture, `npm run tauri build`, and release relaunch.

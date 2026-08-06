@@ -113,7 +113,7 @@ export const useConnLensStore = create<ConnLensStore>((set, get) => ({
     if (!snapshot) return;
     const settings = { ...snapshot.settings, ...patch };
     try {
-      set({ snapshot: await api.updateSettings(settings), toast: "Saved" });
+      set({ snapshot: await api.updateSettings(settings), toast: "Save" });
     } catch (error) {
       set({ toast: messageFor(error) });
     }

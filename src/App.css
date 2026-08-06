@@ -562,6 +562,33 @@ button {
   padding: 0;
 }
 
+.settings-footer {
+  display: flex;
+  grid-row: 5;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  padding: 0 14px;
+  background: #1b1b1b;
+  border-top: 1px solid #363636;
+}
+
+.settings-save-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 60px;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid #4a4a4a;
+  border-radius: 5px;
+  background: #242424;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 0.28);
+}
+
 .scan-stamp,
 .watcher {
   display: inline-flex;
@@ -669,7 +696,7 @@ button {
 .settings-view {
   display: grid;
   gap: 10px;
-  grid-row: 2 / 6;
+  grid-row: 2 / 5;
   padding: 12px;
   overflow: auto;
   scrollbar-width: thin;

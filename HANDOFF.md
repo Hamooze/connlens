@@ -29,6 +29,7 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 - Added account-label auto-detection across token/config/profile rows; Vercel linked-project scanning remains limited to explicitly configured project roots only, while regular access rows prefer connected user, team, org, tenant, AWS SSO account, role, or account labels when available.
 - Replaced the settings Provider List with Custom Sources, removed the filter button, made watcher health dot-only, made scan status passive footer text, added a Delete row action, and made dashboard/source actions open the target.
 - Added a Settings Start on startup toggle and enabled the tray Launch at startup menu item against the same native autostart state.
+- Moved the settings save status into the bottom settings footer and changed the label from `Saved` to `Save`.
 - Added docs, ADRs, security notes, traceability, manual tasks, and visual evidence under `docs\ivw`.
 
 ## Important Decisions

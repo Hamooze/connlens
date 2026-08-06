@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-07 02:13 +03:00
+Last audit: 2026-08-07 02:23 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,12 +11,16 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Generalized account-label auto-detection across token/config/profile providers so project/resource IDs stay contextual unless explicitly linked.
+Moved the settings save status into the bottom settings footer and changed the label from `Saved` to `Save`.
 
 ## Verification
 
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
+- Browser rendered Settings interaction check passed: toggling Start on startup showed `Save` inside the bottom settings footer with no console warnings/errors.
+- Browser screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-settings-save-footer.png`.
+- `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.
+- ConnLens was relaunched from the refreshed release executable as PID `17428`.
 - `cd src-tauri; cargo check` passed.
 - `cd src-tauri; cargo test` passed: 23 tests.
 - `cd src-tauri; cargo clippy -- -D warnings` passed.
