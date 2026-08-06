@@ -109,3 +109,10 @@ Prompt: For Neon DB and Vercel, show the connected user/account instead of proje
 Change: Updated token/config parsing to prefer nested email, username, team, or account labels for account rows; limited bundled Vercel project-link scanning to explicit project roots only; refreshed sanitized Neon/Vercel fixtures and dev UI labels.
 Files touched: `src-tauri\resources\providers\vercel.toml`, `src-tauri\src\scan\strategies.rs`, `src-tauri\src\descriptors.rs`, `tests\fixtures\home\.vercel\auth.json`, `tests\fixtures\home\.neon\credentials.json`, `src\lib\api.ts`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, `cd src-tauri; cargo check`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, descriptor grep for Vercel project-link paths, Browser rendered list check, screenshot capture, `npm run tauri build`, and release relaunch.
+
+## 2026-08-07 02:13 - General account-label detection
+
+Prompt: Apply the same account-name-not-projects behavior to AWS and other access providers, with automatic detection.
+Change: Added shared local-config account label detection for token/profile strategies; profile rows now prefer email/user/org/team/account/AWS SSO/role labels, project IDs stay contextual unless the descriptor uses explicit project-link/project-root scanning, and dev fixture rows reflect account-style labels.
+Files touched: `src-tauri\src\scan\strategies.rs`, `src\lib\api.ts`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo check`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, Browser rendered list check, screenshot capture, `npm run tauri build`, and release relaunch.

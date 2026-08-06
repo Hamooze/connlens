@@ -223,7 +223,7 @@ function makeDevSnapshot(): ConnLensSnapshot {
     connections: [
       row("gh-dev", "github", "GitHub", "dev", "github.com", "github.com", "active", true, now),
       row("gh-work", "github", "GitHub", "work", "github.com", "github.com", "active", false, now),
-      row("aws", "aws", "AWS", "default", "console.aws.amazon.com", "us-east-1", "active", false, now),
+      row("aws", "aws", "AWS", "BRDG Production", "123456789012", "prod", "active", false, now),
       row("vercel", "vercel", "Vercel", "vercel.user@example.test", "vercel.com", "team_acme", "active", false, now),
       row("neon", "neon", "Neon DB", "neon.user@example.test", "console.neon.tech", "acct_fixture_1", "active", false, now),
       row("docker", "docker", "Docker", "registry.npmjs.org mirror", "hub.docker.com", "desktop credential store", "active", false, now),

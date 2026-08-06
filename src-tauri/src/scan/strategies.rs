@@ -2,7 +2,7 @@ use crate::credman::CredmanEntry;
 use crate::descriptors::{Descriptor, Location};
 use crate::models::{ConnectionSource, DetectedConnection, Identity, SourceType};
 use crate::scan::secutil;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -35,6 +35,211 @@ fn detected(
         source: source(path, descriptor, SourceType::ConfigFile),
         fingerprint,
         meta,
+    }
+}
+
+const ACCOUNT_LABEL_KEYS: &[&str] = &[
+    "email",
+    "user_email",
+    "user",
+    "username",
+    "login",
+    "client_email",
+    "displayName",
+    "display_name",
+    "accountName",
+    "account_name",
+    "sso_account_name",
+    "account",
+    "accountId",
+    "account_id",
+    "sso_account_id",
+    "team",
+    "teamName",
+    "team_name",
+    "teamSlug",
+    "team_slug",
+    "currentTeam",
+    "current_team",
+    "organization",
+    "organizationName",
+    "organization_name",
+    "org",
+    "orgName",
+    "org_name",
+    "tenant",
+    "tenantName",
+    "tenant_name",
+];
+
+const NESTED_IDENTITY_KEYS: &[&str] = &[
+    "email",
+    "user_email",
+    "username",
+    "login",
+    "client_email",
+    "displayName",
+    "display_name",
+    "name",
+];
+
+const ACCOUNT_SCOPE_KEYS: &[&str] = &[
+    "currentTeam",
+    "current_team",
+    "teamId",
+    "team_id",
+    "teamSlug",
+    "team_slug",
+    "orgId",
+    "org_id",
+    "organizationId",
+    "organization_id",
+    "accountId",
+    "account_id",
+    "sso_account_id",
+    "tenantId",
+    "tenant_id",
+    "subscriptionId",
+    "subscription_id",
+];
+
+const CONTEXT_SCOPE_KEYS: &[&str] = &[
+    "currentTeam",
+    "current_team",
+    "teamId",
+    "team_id",
+    "teamSlug",
+    "team_slug",
+    "orgId",
+    "org_id",
+    "organizationId",
+    "organization_id",
+    "accountId",
+    "account_id",
+    "sso_account_id",
+    "tenantId",
+    "tenant_id",
+    "subscriptionId",
+    "subscription_id",
+    "project",
+    "projectId",
+    "project_id",
+    "region",
+];
+
+const PROJECT_CONTEXT_KEYS: &[&str] = &[
+    "project",
+    "projectId",
+    "project_id",
+    "projectName",
+    "project_name",
+    "default_project",
+    "quota_project_id",
+    "site_id",
+    "workspace_id",
+];
+
+fn first_account_label(value: &Value) -> Option<String> {
+    first_string_for_keys(value, ACCOUNT_LABEL_KEYS)
+        .or_else(|| role_arn_label(value))
+        .or_else(|| {
+            if has_any_key(value, PROJECT_CONTEXT_KEYS, 0) {
+                None
+            } else {
+                first_string_for_keys(value, &["name"])
+            }
+        })
+}
+
+fn first_scope(value: &Value) -> Option<String> {
+    first_string_for_keys(value, CONTEXT_SCOPE_KEYS)
+}
+
+fn first_account_scope(value: &Value) -> Option<String> {
+    first_string_for_keys(value, ACCOUNT_SCOPE_KEYS)
+}
+
+fn first_string_for_keys(value: &Value, keys: &[&str]) -> Option<String> {
+    find_string_for_keys(value, keys, 0)
+}
+
+fn find_string_for_keys(value: &Value, keys: &[&str], depth: u8) -> Option<String> {
+    if depth > 5 {
+        return None;
+    }
+
+    match value {
+        Value::Object(map) => {
+            for key in keys {
+                if let Some(found) = map
+                    .get(*key)
+                    .and_then(|value| identity_string(value, depth))
+                {
+                    return Some(found);
+                }
+            }
+            map.values()
+                .find_map(|value| find_string_for_keys(value, keys, depth + 1))
+        }
+        Value::Array(values) => values
+            .iter()
+            .find_map(|value| find_string_for_keys(value, keys, depth + 1)),
+        _ => None,
+    }
+}
+
+fn identity_string(value: &Value, depth: u8) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let text = text.trim();
+            (!text.is_empty() && text.len() <= 160).then(|| text.to_string())
+        }
+        Value::Object(_) | Value::Array(_) => {
+            find_string_for_keys(value, NESTED_IDENTITY_KEYS, depth + 1)
+        }
+        _ => None,
+    }
+}
+
+fn has_any_key(value: &Value, keys: &[&str], depth: u8) -> bool {
+    if depth > 5 {
+        return false;
+    }
+
+    match value {
+        Value::Object(map) => {
+            keys.iter().any(|key| map.contains_key(*key))
+                || map
+                    .values()
+                    .any(|value| has_any_key(value, keys, depth + 1))
+        }
+        Value::Array(values) => values
+            .iter()
+            .any(|value| has_any_key(value, keys, depth + 1)),
+        _ => false,
+    }
+}
+
+fn role_arn_label(value: &Value) -> Option<String> {
+    first_string_for_keys(value, &["role_arn", "roleArn"]).and_then(|arn| {
+        let mut parts = arn.split(':');
+        let account_id = parts.nth(4)?;
+        let role_name = arn.rsplit('/').next().unwrap_or("role");
+        if account_id.is_empty() {
+            None
+        } else {
+            Some(format!("{account_id}/{role_name}"))
+        }
+    })
+}
+
+fn object_value(map: &Map<String, Value>) -> Value {
+    Value::Object(map.clone())
+}
+
+fn insert_if_string(meta: &mut BTreeMap<String, Value>, key: &str, value: Option<String>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        meta.insert(key.to_string(), Value::String(value));
     }
 }
 
@@ -130,41 +335,6 @@ pub mod github {
 pub mod tokens {
     use super::*;
 
-    const IDENTITY_KEYS: &[&str] = &[
-        "email",
-        "username",
-        "login",
-        "displayName",
-        "display_name",
-        "name",
-        "user",
-        "account",
-        "accountName",
-        "account_name",
-        "team",
-        "teamSlug",
-        "team_slug",
-        "currentTeam",
-        "current_team",
-        "accountId",
-        "account_id",
-    ];
-
-    const SCOPE_KEYS: &[&str] = &[
-        "currentTeam",
-        "current_team",
-        "teamId",
-        "team_id",
-        "teamSlug",
-        "team_slug",
-        "orgId",
-        "org_id",
-        "accountId",
-        "account_id",
-        "tenantId",
-        "tenant_id",
-    ];
-
     pub fn token_file(
         descriptor: &Descriptor,
         location: &Location,
@@ -178,9 +348,9 @@ pub mod tokens {
         let fingerprint = secutil::fingerprint(token.as_bytes());
         let suffix = fingerprint.chars().rev().take(4).collect::<String>();
         let suffix = suffix.chars().rev().collect::<String>();
-        let scope = first_string_for_keys(value, SCOPE_KEYS).or_else(|| location.scope.clone());
-        let label = first_string_for_keys(value, IDENTITY_KEYS)
-            .or_else(|| scope.clone())
+        let scope = first_scope(value).or_else(|| location.scope.clone());
+        let label = first_account_label(value)
+            .or_else(|| first_account_scope(value))
             .unwrap_or_else(|| format!("{} (...{suffix})", descriptor.name));
         let mut meta = BTreeMap::new();
         if let Some(confidence) = &location.confidence {
@@ -199,48 +369,6 @@ pub mod tokens {
 
     fn token_value(value: &Value) -> Option<&str> {
         find_token(value, 0)
-    }
-
-    fn first_string_for_keys(value: &Value, keys: &[&str]) -> Option<String> {
-        find_string_for_keys(value, keys, 0)
-    }
-
-    fn find_string_for_keys(value: &Value, keys: &[&str], depth: u8) -> Option<String> {
-        if depth > 5 {
-            return None;
-        }
-
-        match value {
-            Value::Object(map) => {
-                for key in keys {
-                    if let Some(found) = map
-                        .get(*key)
-                        .and_then(|value| identity_string(value, depth))
-                    {
-                        return Some(found);
-                    }
-                }
-                map.values()
-                    .find_map(|value| find_string_for_keys(value, keys, depth + 1))
-            }
-            Value::Array(values) => values
-                .iter()
-                .find_map(|value| find_string_for_keys(value, keys, depth + 1)),
-            _ => None,
-        }
-    }
-
-    fn identity_string(value: &Value, depth: u8) -> Option<String> {
-        match value {
-            Value::String(text) => {
-                let text = text.trim();
-                (!text.is_empty() && text.len() <= 160).then(|| text.to_string())
-            }
-            Value::Object(_) | Value::Array(_) => {
-                find_string_for_keys(value, IDENTITY_KEYS, depth + 1)
-            }
-            _ => None,
-        }
     }
 
     fn find_token(value: &Value, depth: u8) -> Option<&str> {
@@ -295,15 +423,21 @@ pub mod profiles {
             let Some(section_obj) = section_value.as_object() else {
                 continue;
             };
-            let label = section
+            let profile = section
                 .strip_prefix("profile ")
                 .unwrap_or(section)
                 .to_string();
+            let section_value = object_value(section_obj);
+            let label = first_account_label(&section_value).unwrap_or_else(|| profile.clone());
             let host = section_obj
                 .get("host")
                 .or_else(|| section_obj.get("endpoint_url"))
-                .or_else(|| section_obj.get("region"))
-                .or_else(|| section_obj.get("account"))
+                .or_else(|| section_obj.get("tenantId"))
+                .or_else(|| section_obj.get("tenant_id"))
+                .or_else(|| section_obj.get("subscriptionId"))
+                .or_else(|| section_obj.get("subscription_id"))
+                .or_else(|| section_obj.get("sso_account_id"))
+                .or_else(|| section_obj.get("account_id"))
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .or_else(|| descriptor.dashboard_url.clone());
@@ -312,14 +446,26 @@ pub mod profiles {
             if let Some(confidence) = &location.confidence {
                 meta.insert("confidence".to_string(), Value::String(confidence.clone()));
             }
+            meta.insert("profile".to_string(), Value::String(profile.clone()));
             if section_obj.contains_key("region") {
                 meta.insert("region".to_string(), section_obj["region"].clone());
             }
+            for key in PROJECT_CONTEXT_KEYS {
+                if let Some(value) = section_obj.get(*key).and_then(Value::as_str) {
+                    meta.insert((*key).to_string(), Value::String(value.to_string()));
+                }
+            }
+            insert_if_string(&mut meta, "roleAccount", role_arn_label(&section_value));
+            let scope = if label == profile {
+                first_scope(&section_value).or_else(|| location.scope.clone())
+            } else {
+                Some(profile)
+            };
             out.push(super::detected(
                 descriptor,
                 label,
                 host,
-                location.scope.clone(),
+                scope,
                 path,
                 fingerprint,
                 meta,
@@ -490,7 +636,7 @@ pub mod profiles {
 
     pub fn azure_profile(
         descriptor: &Descriptor,
-        location: &Location,
+        _location: &Location,
         path: &Path,
         value: &Value,
     ) -> Vec<DetectedConnection> {
@@ -501,10 +647,20 @@ pub mod profiles {
         subscriptions
             .iter()
             .filter_map(|subscription| {
-                let label = subscription
+                let subscription_name = subscription
                     .get("name")
                     .or_else(|| subscription.get("id"))
                     .and_then(Value::as_str)?;
+                let label = first_account_label(subscription)
+                    .or_else(|| {
+                        subscription
+                            .get("user")
+                            .and_then(Value::as_object)
+                            .and_then(|user| user.get("name"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| subscription_name.to_string());
                 let user = subscription
                     .get("user")
                     .and_then(Value::as_object)
@@ -514,15 +670,20 @@ pub mod profiles {
                 if let Some(user) = user {
                     meta.insert("user".to_string(), Value::String(user.to_string()));
                 }
+                meta.insert(
+                    "subscription".to_string(),
+                    Value::String(subscription_name.to_string()),
+                );
                 Some(super::detected(
                     descriptor,
-                    label.to_string(),
-                    descriptor.dashboard_url.clone(),
+                    label,
                     subscription
-                        .get("tenantId")
+                        .get("id")
+                        .or_else(|| subscription.get("subscriptionId"))
                         .and_then(Value::as_str)
                         .map(str::to_string)
-                        .or_else(|| location.scope.clone()),
+                        .or_else(|| descriptor.dashboard_url.clone()),
+                    Some(subscription_name.to_string()),
                     path,
                     subscription
                         .get("id")
@@ -745,6 +906,127 @@ mod tests {
         assert_eq!(rows[0].identity.label, "team_acme");
         assert_eq!(rows[0].identity.scope.as_deref(), Some("team_acme"));
         assert!(!format!("{rows:?}").contains("vercel_secret"));
+    }
+
+    #[test]
+    fn token_file_does_not_label_project_only_configs_as_accounts() {
+        let descriptor = descriptor("gcloud", "Google Cloud");
+        let value = serde_json::json!({
+            "access_token": "gcloud_secret",
+            "project_id": "local-project-123"
+        });
+        let rows = tokens::token_file(
+            &descriptor,
+            &Location {
+                path: "application_default_credentials.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "token_file".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: None,
+            },
+            Path::new("application_default_credentials.json"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_ne!(rows[0].identity.label, "local-project-123");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("local-project-123"));
+        assert!(rows[0].identity.label.starts_with("Google Cloud (..."));
+        assert!(!format!("{rows:?}").contains("gcloud_secret"));
+    }
+
+    #[test]
+    fn profile_file_prefers_account_name_over_profile_or_project() {
+        let descriptor = descriptor("aws", "AWS");
+        let value = serde_json::json!({
+            "profile prod": {
+                "sso_account_name": "BRDG Production",
+                "sso_account_id": "123456789012",
+                "region": "us-east-1",
+                "project": "should-not-be-label"
+            }
+        });
+        let rows = profiles::profile_file(
+            &descriptor,
+            &Location {
+                path: "config".to_string(),
+                format: crate::scan::parsers::Format::Ini,
+                strategy: "profile_file".to_string(),
+                source_type: "config_file".to_string(),
+                scope: Some("config".to_string()),
+                confidence: None,
+            },
+            Path::new("config"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "BRDG Production");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("prod"));
+        assert_eq!(rows[0].identity.host.as_deref(), Some("123456789012"));
+        assert_eq!(
+            rows[0].meta.get("project").and_then(Value::as_str),
+            Some("should-not-be-label")
+        );
+    }
+
+    #[test]
+    fn profile_file_uses_role_arn_account_fallback() {
+        let descriptor = descriptor("aws", "AWS");
+        let value = serde_json::json!({
+            "profile admin": {
+                "role_arn": "arn:aws:iam::123456789012:role/AdminAccess",
+                "region": "us-east-1"
+            }
+        });
+        let rows = profiles::profile_file(
+            &descriptor,
+            &Location {
+                path: "config".to_string(),
+                format: crate::scan::parsers::Format::Ini,
+                strategy: "profile_file".to_string(),
+                source_type: "config_file".to_string(),
+                scope: Some("config".to_string()),
+                confidence: None,
+            },
+            Path::new("config"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "123456789012/AdminAccess");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn azure_profile_prefers_user_over_subscription_name() {
+        let descriptor = descriptor("azure", "Azure");
+        let value = serde_json::json!({
+            "subscriptions": [{
+                "name": "Production subscription",
+                "id": "sub_123",
+                "tenantId": "tenant_abc",
+                "user": {"name": "azure.user@example.test"}
+            }]
+        });
+        let rows = profiles::azure_profile(
+            &descriptor,
+            &Location {
+                path: "azureProfile.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "azure_profile".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: None,
+            },
+            Path::new("azureProfile.json"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "azure.user@example.test");
+        assert_eq!(
+            rows[0].identity.scope.as_deref(),
+            Some("Production subscription")
+        );
+        assert_eq!(rows[0].identity.host.as_deref(), Some("sub_123"));
     }
 
     #[test]
