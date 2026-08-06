@@ -67,3 +67,10 @@ Prompt: Make the footer Rescan control show only the loop icon, not the word.
 Change: Removed visible Rescan text from the footer button, kept aria-label/title, and fixed footer control columns to icon-button widths.
 Files touched: `src\App.tsx`, `src\App.css`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, `npm run tauri build`, Browser DOM/interaction/console smoke, and Playwright screenshot capture.
+
+## 2026-08-06 15:45 - Dark scrollbar polish
+
+Prompt: Remove the visible provider rail slider while keeping it scrollable, and make the right scrollbar a white bar on black background.
+Change: Hid the horizontal provider rail scrollbar, removed its bottom scrollbar padding, and styled content/settings vertical scrollbars with a black track and white thumb.
+Files touched: `src\App.css`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `npm run tauri build`, Browser DOM/interaction/console scroll-style smoke, and Playwright screenshot capture.

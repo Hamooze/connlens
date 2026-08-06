@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-06 15:39 +03:00
+Last audit: 2026-08-06 15:45 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,12 +11,14 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Changed the footer Rescan control to an icon-only loop button while preserving accessible label/title text.
+Hid the provider rail's horizontal scrollbar while preserving horizontal scrolling, and restyled vertical scrollbars to a white thumb on black track.
 
 ## Verification
 
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
+- Browser DOM/interaction/console check passed for hidden provider rail scrollbar, preserved horizontal rail scrolling, and white-on-black vertical scrollbar styles.
+- Playwright screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-hidden-horizontal-scrollbar.png`.
 - `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.
 - Browser DOM/interaction/console check passed for icon-only footer Rescan control; the button retained title/aria access and updated scan time without visible footer text.
 - Playwright screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-icon-only-rescan.png`.
