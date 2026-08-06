@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-06 16:57 +03:00
+Last audit: 2026-08-07 01:39 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,12 +11,15 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Switched the Settings footer from the full Nemu wordmark to the compact luminous Nemu mark beside the pressable `https://nemu.ae` link.
+Switched the Settings footer to the provided Nemu PNG logo beside the pressable `https://nemu.ae` link.
 
 ## Verification
 
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
+- Browser DOM/interaction/console check passed for the provided Nemu PNG footer logo: the image loaded from `/nemulogo_withouttxt.png` at 28x28, the `https://nemu.ae` link remained actionable, and there were no console warnings/errors.
+- Playwright screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-nemu-provided-png-footer.png`.
+- `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.
 - Browser DOM/interaction/console check passed for the alternate Nemu footer logo: the image loaded from `/nemu-mark-luminous.svg` at 20x20, the `https://nemu.ae` link remained actionable, and there were no console warnings/errors.
 - Playwright screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-nemu-mark-footer.png`.
 - `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.

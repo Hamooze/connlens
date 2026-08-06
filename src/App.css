@@ -806,8 +806,8 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 28px;
-  padding: 0 8px;
+  min-height: 32px;
+  padding: 0 9px 0 7px;
   border: 1px solid #3c3c3c;
   border-radius: 5px;
   background: #1f1f1f;
@@ -820,10 +820,11 @@ button {
 }
 
 .powered-by img {
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   display: block;
-  object-fit: contain;
+  object-fit: cover;
+  border-radius: 4px;
 }
 
 .powered-by a span {

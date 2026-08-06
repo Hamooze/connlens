@@ -88,3 +88,10 @@ Prompt: Use the other Nemu logo.
 Change: Replaced the full Nemu wordmark asset with the compact luminous Nemu mark from the local Nemu brand kit and resized the settings footer logo to square icon dimensions.
 Files touched: `public\nemu-logo.svg`, `public\nemu-mark-luminous.svg`, `src\App.tsx`, `src\App.css`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, Browser DOM/interaction/console footer check, Playwright screenshot capture, and `npm run tauri build`.
+
+## 2026-08-07 01:34 - Provided Nemu PNG logo
+
+Prompt: Use `C:\Users\hamza\Downloads\Nemu\externals\Logo\nemulogo_withouttxt.png` as the logo.
+Change: Replaced the luminous SVG footer mark with the provided PNG, resized the settings footer logo treatment for the PNG, and removed the old SVG asset.
+Files touched: `public\nemulogo_withouttxt.png`, `public\nemu-mark-luminous.svg`, `src\App.tsx`, `src\App.css`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, Browser DOM/interaction/console footer check, Playwright screenshot capture, and `npm run tauri build`.
