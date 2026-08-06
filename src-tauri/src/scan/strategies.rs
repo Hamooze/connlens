@@ -41,6 +41,8 @@ fn detected(
 const ACCOUNT_LABEL_KEYS: &[&str] = &[
     "email",
     "user_email",
+    "user_id",
+    "userId",
     "user",
     "username",
     "login",
@@ -75,6 +77,8 @@ const ACCOUNT_LABEL_KEYS: &[&str] = &[
 const NESTED_IDENTITY_KEYS: &[&str] = &[
     "email",
     "user_email",
+    "user_id",
+    "userId",
     "username",
     "login",
     "client_email",
@@ -879,6 +883,31 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].identity.label, "neon.user@example.test");
         assert_eq!(rows[0].identity.scope.as_deref(), Some("acct_1"));
+        assert!(!format!("{rows:?}").contains("napi_secret"));
+    }
+
+    #[test]
+    fn token_file_uses_user_id_when_email_is_missing() {
+        let descriptor = descriptor("neon", "Neon DB");
+        let value = serde_json::json!({
+            "access_token": "napi_secret",
+            "user_id": "usr_fixture_1"
+        });
+        let rows = tokens::token_file(
+            &descriptor,
+            &Location {
+                path: "credentials.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "token_file".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: None,
+            },
+            Path::new("credentials.json"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "usr_fixture_1");
         assert!(!format!("{rows:?}").contains("napi_secret"));
     }
 

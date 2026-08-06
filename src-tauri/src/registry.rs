@@ -115,6 +115,27 @@ fn registry_path(home: &Path) -> PathBuf {
     home.join("registry.json")
 }
 
+fn is_ephemeral_project_link(connection: &Connection) -> bool {
+    connection
+        .meta
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "project_link")
+}
+
+fn is_superseded_fingerprint_fallback(
+    connection: &Connection,
+    seen_source_paths: &BTreeSet<(String, String)>,
+) -> bool {
+    let Some(path) = connection.source.path.as_ref() else {
+        return false;
+    };
+    let fallback_prefix = format!("{} (...", connection.provider_name);
+    connection.identity.label.starts_with(&fallback_prefix)
+        && connection.identity.label.ends_with(')')
+        && seen_source_paths.contains(&(connection.provider.clone(), path.clone()))
+}
+
 fn backup_path(home: &Path) -> PathBuf {
     home.join("registry.json.bak")
 }
@@ -228,6 +249,7 @@ impl Registry {
         let now = now_iso();
         let mut changes = ChangeSet::default();
         let mut seen_ids = BTreeSet::new();
+        let mut seen_source_paths = BTreeSet::new();
         let old_by_id = self
             .file
             .connections
@@ -244,6 +266,9 @@ impl Registry {
 
             let id = connection_id(&detected);
             seen_ids.insert(id.clone());
+            if let Some(path) = detected.source.path.as_deref() {
+                seen_source_paths.insert((detected.provider.clone(), path.to_string()));
+            }
 
             if let Some(existing) = old_by_id.get(&id) {
                 let mut updated = existing.clone();
@@ -297,6 +322,11 @@ impl Registry {
                 .map(|provider| existing.provider == provider)
                 .unwrap_or(true);
             if !seen_ids.contains(&existing.id) && in_scope {
+                if is_ephemeral_project_link(existing)
+                    || is_superseded_fingerprint_fallback(existing, &seen_source_paths)
+                {
+                    continue;
+                }
                 let mut missing = existing.clone();
                 if missing.status != ConnectionStatus::Missing {
                     changes.missing.push(missing.id.clone());
@@ -606,6 +636,61 @@ mod tests {
         );
         assert_eq!(registry.purge_missing(), 1);
         assert!(registry.file.connections.is_empty());
+    }
+
+    #[test]
+    fn project_link_rows_are_pruned_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let mut project = detected(
+            "linked-app",
+            "https://vercel.com",
+            "app/.vercel/project.json",
+            Some("sha256:project"),
+        );
+        project.provider = "vercel".to_string();
+        project.provider_name = "Vercel".to_string();
+        project.identity.scope = Some("Linked project".to_string());
+        project.meta.insert(
+            "kind".to_string(),
+            Value::String("project_link".to_string()),
+        );
+
+        registry.diff(vec![project], Some("vercel"));
+        assert_eq!(registry.file.connections.len(), 1);
+
+        registry.diff(Vec::new(), Some("vercel"));
+        assert!(registry.file.connections.is_empty());
+    }
+
+    #[test]
+    fn fingerprint_fallback_rows_are_pruned_when_source_has_active_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let source = "C:/Users/dev/.config/neonctl/credentials.json";
+        let mut fallback = detected(
+            "Neon DB (...66e4)",
+            "https://console.neon.tech",
+            source,
+            Some("sha256:old"),
+        );
+        fallback.provider = "neon".to_string();
+        fallback.provider_name = "Neon DB".to_string();
+        let mut user = detected(
+            "usr_fixture_1",
+            "https://console.neon.tech",
+            source,
+            Some("sha256:new"),
+        );
+        user.provider = "neon".to_string();
+        user.provider_name = "Neon DB".to_string();
+
+        registry.diff(vec![fallback], Some("neon"));
+        assert_eq!(registry.file.connections.len(), 1);
+
+        registry.diff(vec![user], Some("neon"));
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections[0].identity.label, "usr_fixture_1");
     }
 
     #[test]

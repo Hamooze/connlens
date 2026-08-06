@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-07 02:23 +03:00
+Last audit: 2026-08-07 02:46 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,12 +11,18 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Moved the settings save status into the bottom settings footer and changed the label from `Saved` to `Save`.
+Cleaned profile/account display refresh behavior by pruning stale linked-project rows and superseded fingerprint fallback rows, and using `user_id`/`userId` when no email is available.
 
 ## Verification
 
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
+- `cd src-tauri; cargo test` passed: 26 tests.
+- `cd src-tauri; cargo clippy -- -D warnings` passed.
+- `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1` passed.
+- Post-relaunch registry verification passed: Vercel stale `project_link` missing rows were flushed, and Neon rendered one active user ID from `user_id`.
+- `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.
+- ConnLens was relaunched from the refreshed release executable as PID `8364`.
 - Browser rendered Settings interaction check passed: toggling Start on startup showed `Save` inside the bottom settings footer with no console warnings/errors.
 - Browser screenshot captured `C:\Users\hamza\.codex\visualizations\2026\08\06\019fd670-aa30-7bd3-bd6d-c7fce14256c9\connlens-settings-save-footer.png`.
 - `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.

@@ -123,3 +123,10 @@ Prompt: Fix the location of the `Saved` status and make it say `Save`.
 Change: Moved the settings save status into a dedicated bottom settings footer, kept the scrollable settings content above it, and changed the settings update toast text from `Saved` to `Save`.
 Files touched: `src\App.tsx`, `src\App.css`, `src\lib\store.ts`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, Browser rendered Settings interaction check, screenshot capture, `npm run tauri build`, and release relaunch.
+
+## 2026-08-07 02:46 - Profile row refresh cleanup
+
+Prompt: Vercel/Neon profiles were not visible after relaunch; likely stale rows needed flushing.
+Change: Added `user_id`/`userId` as account-label fallbacks, automatically pruned stale Vercel `project_link` rows when missing, and pruned superseded fingerprint fallback rows when the same source file now has an active account identity.
+Files touched: `src-tauri\src\registry.rs`, `src-tauri\src\scan\strategies.rs`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, post-relaunch registry verification, `npm run tauri build`, and release relaunch.
