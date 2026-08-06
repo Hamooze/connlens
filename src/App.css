@@ -820,9 +820,10 @@ button {
 }
 
 .powered-by img {
-  width: 58px;
-  height: auto;
+  width: 20px;
+  height: 20px;
   display: block;
+  object-fit: contain;
 }
 
 .powered-by a span {

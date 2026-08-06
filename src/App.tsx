@@ -608,7 +608,7 @@ function SettingsView({ settings }: { settings?: SettingsState }) {
             void api.openExternalUrl("https://nemu.ae");
           }}
         >
-          <img src="/nemu-logo.svg" alt="" />
+          <img src="/nemu-mark-luminous.svg" alt="" />
           <span>nemu.ae</span>
         </a>
       </div>

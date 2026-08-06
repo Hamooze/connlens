@@ -81,3 +81,10 @@ Prompt: Add "Powered by Nemu.ae" under Settings with a pressable nemu.ae link an
 Change: Copied the Nemu brand-kit SVG into public assets, added a compact Settings footer, and routed the nemu.ae link through a validated Tauri external URL opener.
 Files touched: `public\nemu-logo.svg`, `src\App.tsx`, `src\App.css`, `src\lib\api.ts`, `src-tauri\src\commands.rs`, `src-tauri\src\lib.rs`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, Browser DOM/interaction/console footer check, Playwright screenshot capture, and `npm run tauri build`.
+
+## 2026-08-06 16:57 - Compact Nemu mark
+
+Prompt: Use the other Nemu logo.
+Change: Replaced the full Nemu wordmark asset with the compact luminous Nemu mark from the local Nemu brand kit and resized the settings footer logo to square icon dimensions.
+Files touched: `public\nemu-logo.svg`, `public\nemu-mark-luminous.svg`, `src\App.tsx`, `src\App.css`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm test`, `npm run build`, Browser DOM/interaction/console footer check, Playwright screenshot capture, and `npm run tauri build`.
