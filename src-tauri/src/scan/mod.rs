@@ -107,10 +107,10 @@ fn dispatch_strategy(
         "docker_auths" => strategies::profiles::docker_auths(descriptor, location, path, value),
         "glab_config" => strategies::profiles::glab_config(descriptor, location, path, value),
         "gh_hosts" => strategies::github::gh_hosts(descriptor, location, path, value),
-        "mcp_servers" => strategies::mcp::mcp_servers(descriptor, location, path, value),
         "npmrc" => strategies::profiles::npmrc(descriptor, location, path, value),
         "profile_file" => strategies::profiles::profile_file(descriptor, location, path, value),
         "token_file" => strategies::tokens::token_file(descriptor, location, path, value),
+        "vercel_project" => strategies::profiles::vercel_project(descriptor, location, path, value),
         _ => Vec::new(),
     }
 }

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 #[command(
     name = "connlens",
     version,
-    about = "Inspect local CLI and MCP connections"
+    about = "Inspect local developer app connections"
 )]
 struct Cli {
     #[command(subcommand)]

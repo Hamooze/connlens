@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import {
   siCloudflare,
-  siCursor,
   siDocker,
   siGithub,
   siGitlab,
@@ -73,8 +72,6 @@ const providerVisuals: Record<string, ProviderVisual> = {
   shopify: { name: "Shopify", color: "#95bf47", icon: siShopify },
   supabase: { name: "Supabase", color: "#3ecf8e", icon: siSupabase },
   sentry: { name: "Sentry", color: "#fb4226", icon: siSentry },
-  mcp: { name: "MCP", color: "#f5f5f5", icon: siCursor },
-  "mcp-cursor": { name: "Cursor MCP", color: "#f5f5f5", icon: siCursor },
 };
 
 const popularProviderIds = [

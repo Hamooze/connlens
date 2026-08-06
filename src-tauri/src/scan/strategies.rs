@@ -127,110 +127,6 @@ pub mod github {
     }
 }
 
-pub mod mcp {
-    use super::*;
-
-    pub fn mcp_servers(
-        descriptor: &Descriptor,
-        location: &Location,
-        path: &Path,
-        value: &Value,
-    ) -> Vec<DetectedConnection> {
-        let mut out = Vec::new();
-        collect_servers(
-            descriptor,
-            location,
-            path,
-            value.get("mcpServers").unwrap_or(value),
-            location.scope.clone(),
-            &mut out,
-        );
-
-        if let Some(projects) = value.get("projects").and_then(Value::as_object) {
-            for (project_path, project_value) in projects {
-                let scope = Path::new(project_path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(|name| format!("Project: {name}"))
-                    .unwrap_or_else(|| "Project MCP".to_string());
-                collect_servers(
-                    descriptor,
-                    location,
-                    path,
-                    project_value.get("mcpServers").unwrap_or(project_value),
-                    Some(scope),
-                    &mut out,
-                );
-            }
-        }
-
-        out
-    }
-
-    fn collect_servers(
-        descriptor: &Descriptor,
-        _location: &Location,
-        path: &Path,
-        value: &Value,
-        scope: Option<String>,
-        out: &mut Vec<DetectedConnection>,
-    ) {
-        let Some(servers) = value.as_object() else {
-            return;
-        };
-
-        for (name, server) in servers {
-            let command = server.get("command").and_then(Value::as_str);
-            let url = server.get("url").and_then(Value::as_str);
-            let mut meta = BTreeMap::new();
-            meta.insert(
-                "kind".to_string(),
-                Value::String(
-                    if command.is_some() {
-                        "command"
-                    } else if url.is_some() {
-                        "url"
-                    } else {
-                        "unknown"
-                    }
-                    .to_string(),
-                ),
-            );
-            if let Some(command) = command {
-                meta.insert("command".to_string(), Value::String(command.to_string()));
-            }
-            if let Some(url) = url {
-                meta.insert("url".to_string(), Value::String(url.to_string()));
-            }
-            if let Some(env) = server.get("env").and_then(Value::as_object) {
-                let safe_env = env
-                    .iter()
-                    .map(|(key, value)| {
-                        let fp = value
-                            .as_str()
-                            .map(|raw| secutil::fingerprint(raw.as_bytes()))
-                            .unwrap_or_else(|| "sha256:00000000".to_string());
-                        (key.clone(), Value::String(fp))
-                    })
-                    .collect();
-                meta.insert("env".to_string(), Value::Object(safe_env));
-            }
-
-            let mut connection = super::detected(
-                descriptor,
-                name.to_string(),
-                url.or(command).map(str::to_string),
-                scope.clone(),
-                path,
-                None,
-                meta,
-            );
-            connection.source.descriptor_id = Some(descriptor.id.clone());
-            out.push(connection);
-        }
-    }
-}
-
 pub mod tokens {
     use super::*;
 
@@ -404,6 +300,53 @@ pub mod profiles {
             .collect()
     }
 
+    pub fn vercel_project(
+        descriptor: &Descriptor,
+        _location: &Location,
+        path: &Path,
+        value: &Value,
+    ) -> Vec<DetectedConnection> {
+        let project_id = value.get("projectId").and_then(Value::as_str);
+        let org_id = value.get("orgId").and_then(Value::as_str);
+        if project_id.is_none() && org_id.is_none() {
+            return Vec::new();
+        }
+
+        let label = value
+            .get("projectName")
+            .or_else(|| value.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| project_folder_name(path))
+            .unwrap_or_else(|| "Vercel project".to_string());
+        let fingerprint = project_id
+            .or(org_id)
+            .map(|id| secutil::fingerprint(id.as_bytes()));
+        let mut meta = BTreeMap::from([("kind".to_string(), json!("project_link"))]);
+        if let Some(project_id) = project_id {
+            meta.insert(
+                "projectFingerprint".to_string(),
+                Value::String(secutil::fingerprint(project_id.as_bytes())),
+            );
+        }
+        if let Some(org_id) = org_id {
+            meta.insert(
+                "orgFingerprint".to_string(),
+                Value::String(secutil::fingerprint(org_id.as_bytes())),
+            );
+        }
+
+        vec![super::detected(
+            descriptor,
+            label,
+            descriptor.dashboard_url.clone(),
+            Some("Linked project".to_string()),
+            path,
+            fingerprint,
+            meta,
+        )]
+    }
+
     pub fn npmrc(
         descriptor: &Descriptor,
         location: &Location,
@@ -549,6 +492,15 @@ pub mod profiles {
         }
         None
     }
+
+    fn project_folder_name(path: &Path) -> Option<String> {
+        path.parent()?
+            .parent()?
+            .file_name()?
+            .to_str()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    }
 }
 
 pub mod envvars {
@@ -681,34 +633,6 @@ mod tests {
     }
 
     #[test]
-    fn mcp_env_values_are_fingerprinted() {
-        let descriptor = descriptor("mcp-cursor", "Cursor MCP");
-        let value = serde_json::json!({
-            "mcpServers": {
-                "postgres": {
-                    "command": "npx",
-                    "env": {"NEON_API_KEY": "secret-secret-secret"}
-                }
-            }
-        });
-        let rows = mcp::mcp_servers(
-            &descriptor,
-            &Location {
-                path: "cursor-mcp.json".to_string(),
-                format: crate::scan::parsers::Format::Json,
-                strategy: "mcp_servers".to_string(),
-                source_type: "config_file".to_string(),
-                scope: Some("Cursor".to_string()),
-                confidence: None,
-            },
-            Path::new("cursor-mcp.json"),
-            &value,
-        );
-        assert_eq!(rows.len(), 1);
-        assert!(!format!("{rows:?}").contains("secret-secret-secret"));
-    }
-
-    #[test]
     fn token_file_finds_snake_case_access_tokens() {
         let descriptor = descriptor("neon", "Neon DB");
         let value = serde_json::json!({"access_token": "napi_secret", "account_id": "acct_1"});
@@ -728,6 +652,39 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].identity.scope.as_deref(), Some("acct_1"));
         assert!(!format!("{rows:?}").contains("napi_secret"));
+    }
+
+    #[test]
+    fn vercel_project_links_are_fingerprinted() {
+        let mut descriptor = descriptor("vercel", "Vercel");
+        descriptor.dashboard_url = Some("https://vercel.com".to_string());
+        let value = serde_json::json!({
+            "orgId": "team_fixture_org_000000000000000000",
+            "projectId": "prj_fixture_project_000000000000000000"
+        });
+        let rows = profiles::vercel_project(
+            &descriptor,
+            &Location {
+                path: "project.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "vercel_project".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: None,
+            },
+            Path::new("C:/Users/dev/Projects/launch/.vercel/project.json"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "launch");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("Linked project"));
+        assert!(rows[0]
+            .fingerprint
+            .as_deref()
+            .unwrap()
+            .starts_with("sha256:"));
+        assert!(!format!("{rows:?}").contains("prj_fixture_project"));
+        assert!(!format!("{rows:?}").contains("team_fixture_org"));
     }
 
     #[test]

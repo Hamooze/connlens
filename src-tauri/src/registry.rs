@@ -1,6 +1,7 @@
 use crate::models::{
-    ChangeSet, Connection, ConnectionStatus, DetectedConnection, ErrorPayload, Identity,
-    RegisterEntry, RegistryFile, Settings, Snapshot, SnapshotConnection, SourceType, WatcherHealth,
+    is_retired_provider_id, ChangeSet, Connection, ConnectionStatus, DetectedConnection,
+    ErrorPayload, Identity, RegisterEntry, RegistryFile, Settings, Snapshot, SnapshotConnection,
+    SourceType, WatcherHealth,
 };
 use chrono::Utc;
 use serde_json::Value;
@@ -237,6 +238,10 @@ impl Registry {
         let mut next = Vec::new();
 
         for detected in detected {
+            if is_retired_provider_id(&detected.provider) {
+                continue;
+            }
+
             let id = connection_id(&detected);
             seen_ids.insert(id.clone());
 
@@ -284,6 +289,10 @@ impl Registry {
         }
 
         for existing in &self.file.connections {
+            if is_retired_provider_id(&existing.provider) {
+                continue;
+            }
+
             let in_scope = scope
                 .map(|provider| existing.provider == provider)
                 .unwrap_or(true);
@@ -325,6 +334,7 @@ impl Registry {
             .file
             .connections
             .iter()
+            .filter(|connection| !is_retired_provider_id(&connection.provider))
             .cloned()
             .map(|connection| SnapshotConnection {
                 removable: connection.removable(),
@@ -621,5 +631,31 @@ mod tests {
             registry.remove(&id),
             Err(RegistryError::NotRemovable)
         ));
+    }
+
+    #[test]
+    fn retired_provider_rows_are_hidden_and_pruned() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let row = detected("Claude Code", "localhost", ".claude.json", None);
+        registry.file.connections.push(Connection {
+            id: "old-mcp-row".to_string(),
+            provider: "mcp-claude-code".to_string(),
+            provider_name: "Claude Code".to_string(),
+            identity: row.identity,
+            source: row.source,
+            status: ConnectionStatus::Active,
+            fingerprint: None,
+            first_seen: "2026-08-06T00:00:00.000Z".to_string(),
+            last_seen: "2026-08-06T00:00:00.000Z".to_string(),
+            hidden: false,
+            seen: true,
+            meta: BTreeMap::new(),
+        });
+
+        let snapshot = registry.snapshot(Vec::new(), WatcherHealth::Ok);
+        assert!(snapshot.connections.is_empty());
+        registry.diff(Vec::new(), None);
+        assert!(registry.file.connections.is_empty());
     }
 }

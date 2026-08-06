@@ -1,5 +1,5 @@
 use crate::descriptors;
-use crate::models::{ErrorPayload, Settings, Snapshot};
+use crate::models::{is_retired_provider_id, ErrorPayload, Settings, Snapshot};
 use crate::registry;
 use crate::scan;
 use crate::scan::parsers::Format;
@@ -320,6 +320,13 @@ fn validate_provider_name(name: &str) -> CommandResult<String> {
 }
 
 fn reject_reserved_provider_id(id: &str) -> CommandResult<()> {
+    if is_retired_provider_id(id) {
+        return Err(ErrorPayload::new(
+            "validation_error",
+            "MCP and Claude provider IDs are retired from built-in detection",
+        ));
+    }
+
     let (descriptors, _) = descriptors::load_all(Path::new("__connlens_builtin_only__"));
     if descriptors.iter().any(|descriptor| descriptor.id == id) {
         return Err(ErrorPayload::new(

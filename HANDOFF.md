@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-08-06 15:24 +03:00
+Last updated: 2026-08-06 15:27 +03:00
 Project: Connlens
 Theme: ConnLens dark utility alpha
 Current branch: codex/connlens-start
@@ -13,7 +13,7 @@ Test commands: `npm test`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clip
 
 ## Current State
 
-ConnLens is a runnable Tauri 2 + React + TypeScript alpha foundation for local account/connection visibility. It now defaults to a compact dark utility UI, opens near the tray/work-area edge, supports titlebar dragging, and uses an X button to hide the popover back to tray. The app includes registry persistence, expanded provider descriptors, a custom-source provider form, parsers, fixture-backed provider strategies, headless CLI read commands, documentation, and a Windows NSIS installer artifact.
+ConnLens is a runnable Tauri 2 + React + TypeScript alpha foundation for local developer app connection visibility. It now defaults to a compact dark utility UI, opens near the tray/work-area edge, supports titlebar dragging, and uses an X button to hide the popover back to tray. The app includes registry persistence, expanded provider descriptors, a custom-source provider form, parsers, fixture-backed provider strategies, headless CLI read commands, documentation, and a Windows NSIS installer artifact.
 
 Release binary: `src-tauri\target\release\connlens.exe`
 Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
@@ -22,10 +22,11 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 
 - Implemented the ConnLens alpha app shell from the surge plan.
 - Added registry v1 state, stable connection IDs, missing/changed/hidden lifecycle, backup recovery, provider descriptors, parsers, and sanitized fixtures.
-- Added GitHub, Cursor MCP, Vercel, Neon, Shopify, AWS, Azure, Google Cloud, Docker, npm, GitLab, Netlify, Cloudflare, Stripe, Supabase, and Sentry candidate scanning contracts with fingerprint-only secret handling.
+- Added GitHub, Vercel, Neon, Shopify, AWS, Azure, Google Cloud, Docker, npm, GitLab, Netlify, Cloudflare, Stripe, Supabase, and Sentry candidate scanning contracts with fingerprint-only secret handling.
 - Added Tauri IPC commands, tray/menu scaffolding, release CLI commands, and the React popover/settings UI.
 - Reworked the UI into the dark compact desktop-tool style from the requested reference, including provider logos, a popular-provider rail, draggable titlebar, and X close button.
-- Removed the user-facing Hide feature and removed Claude-specific MCP descriptors from the bundled provider catalog.
+- Removed the user-facing Hide feature and retired MCP/Claude provider IDs so existing saved rows are hidden and pruned on scan.
+- Added Vercel linked-project scanning for `.vercel/project.json` with project/org IDs fingerprinted before storage.
 - Replaced the settings Provider List with Custom Sources, removed the filter button, made watcher health dot-only, made scan status passive footer text, added a Delete row action, and made dashboard/source actions open the target.
 - Added docs, ADRs, security notes, traceability, manual tasks, and visual evidence under `docs\ivw`.
 

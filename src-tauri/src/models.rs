@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+pub fn is_retired_provider_id(provider: &str) -> bool {
+    let provider = provider.to_ascii_lowercase();
+    provider == "mcp"
+        || provider.starts_with("mcp-")
+        || provider == "claude"
+        || provider.starts_with("claude-")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionStatus {

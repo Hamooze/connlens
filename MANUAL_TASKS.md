@@ -14,11 +14,6 @@
   Blocks future implementation: No for alpha; yes before declaring GitHub detection complete for release.
   Resume step: Replace or extend `src-tauri/src/credman.rs` with names-only Windows API enumeration and attach redacted evidence.
 
-- Required action: Verify Claude Desktop, Claude Code, and Cursor MCP configs on a real developer machine with redacted evidence.
-  Why Codex cannot complete it: It requires live app config files outside the sanitized fixture pack.
-  Blocks future implementation: No for alpha.
-  Resume step: Add sanitized fixture variants and update MCP descriptors if paths differ.
-
 ## Windows UX Checks
 
 - Required action: Test tray positioning on Windows 11 with 100% and 150% DPI, two monitors, and tray overflow flyout.

@@ -1,4 +1,4 @@
-use crate::models::ProviderError;
+use crate::models::{is_retired_provider_id, ProviderError};
 use crate::registry::app_home;
 use crate::scan::parsers::Format;
 use glob::glob;
@@ -11,10 +11,6 @@ const BUNDLED: &[(&str, &str)] = &[
     (
         "github.toml",
         include_str!("../resources/providers/github.toml"),
-    ),
-    (
-        "mcp-cursor.toml",
-        include_str!("../resources/providers/mcp-cursor.toml"),
     ),
     ("aws.toml", include_str!("../resources/providers/aws.toml")),
     (
@@ -154,6 +150,7 @@ pub fn load_all(home: &Path) -> (Vec<Descriptor>, Vec<ProviderError>) {
         }
     }
     merged.sort_by(|a, b| a.id.cmp(&b.id));
+    merged.retain(|descriptor| !is_retired_provider_id(&descriptor.id));
     (merged, errors)
 }
 

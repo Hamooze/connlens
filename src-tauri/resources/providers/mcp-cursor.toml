@@ -1,9 +1,0 @@
-id = "mcp-cursor"
-name = "Cursor MCP"
-
-[[locations]]
-path = "%APPDATA%/Cursor/mcp.json"
-format = "json"
-strategy = "mcp_servers"
-source_type = "config_file"
-scope = "Cursor"

@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "Cursor MCP": {
-      "command": "cmd",
-      "args": ["/c", "cursor-mcp"]
-    }
-  }
-}

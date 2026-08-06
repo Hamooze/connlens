@@ -5,7 +5,7 @@ Security tier: SEC-2
 
 ## Scope
 
-ConnLens reads local CLI and MCP configuration files, fingerprints secret-like values, and writes metadata to the local user profile. It has no server, no login, no telemetry, and no product network calls.
+ConnLens reads local developer app configuration files, fingerprints secret-like values, and writes metadata to the local user profile. It has no server, no login, no telemetry, and no product network calls.
 
 ## STRIDE Focus
 

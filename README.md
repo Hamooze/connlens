@@ -1,13 +1,15 @@
 # ConnLens
 
-ConnLens is a local-only Windows tray utility for seeing CLI and MCP connections on a developer machine. It defaults to a compact dark popover, scans local configuration files, stores metadata in `%LOCALAPPDATA%\ConnLens\registry.json` or `CONNLENS_HOME`, and never persists raw secret values.
+ConnLens is a local-only Windows tray utility for seeing developer app connections on a developer machine. It defaults to a compact dark popover, scans local configuration files, stores metadata in `%LOCALAPPDATA%\ConnLens\registry.json` or `CONNLENS_HOME`, and never persists raw secret values.
 
 GitHub: `https://github.com/Hamooze/connlens`
 Current development branch: `codex/connlens-start`
 
 ## Providers
 
-Bundled alpha providers: AWS, Azure, Cloudflare, Docker, GitHub, GitLab, Google Cloud, Cursor MCP, Neon DB, Netlify, npm, Sentry, Shopify, Stripe, Supabase, and Vercel.
+Bundled alpha providers: AWS, Azure, Cloudflare, Docker, GitHub, GitLab, Google Cloud, Neon DB, Netlify, npm, Sentry, Shopify, Stripe, Supabase, and Vercel.
+
+Vercel detection now includes linked local projects from `.vercel/project.json` as well as token/config candidates. MCP and Claude/Cursor MCP sources are retired from the built-in catalog; use Custom Sources only for unusual non-built-in local files that should be treated as ordinary token/config providers.
 
 The UI includes brand marks for the common developer apps, a popular-provider strip, search/grouping, custom sources, a draggable titlebar, and an X button that hides the popover back to tray. The previous Hide/Show action is intentionally removed.
 

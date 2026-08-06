@@ -40,6 +40,90 @@ strategy = "token_file"
 source_type = "config_file"
 confidence = "candidate"
 
+[[locations]]
+path = "$PROJECT_ROOTS/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/Downloads/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/Downloads/*/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/Downloads/*/*/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/Documents/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/Documents/*/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/Documents/*/*/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/OneDrive/Documents/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/OneDrive/Documents/*/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/OneDrive/Documents/*/*/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
+[[locations]]
+path = "%USERPROFILE%/Desktop/*/.vercel/project.json"
+format = "json"
+strategy = "vercel_project"
+source_type = "config_file"
+confidence = "project_link"
+
 [[env_vars]]
 name = "VERCEL_TOKEN"
 label = "Vercel token"

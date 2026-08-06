@@ -1,7 +1,7 @@
 [package]
 name = "connlens"
 version = "0.1.0"
-description = "Local-only Windows tray utility for CLI and MCP connection visibility."
+description = "Local-only Windows tray utility for developer app connection visibility."
 authors = ["Hamza"]
 edition = "2021"
 

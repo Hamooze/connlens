@@ -52,3 +52,11 @@ Change: Added GitHub branch/publish details to `README.md` and `HANDOFF.md`, kep
 Files touched: `.gitignore`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `gh auth status` confirmed `Hamooze` is authenticated and active; final source/test verification from the previous pass remains current.
 Notes: Branch-first workflow retained; no merge to `main` was performed.
+
+## 2026-08-06 15:27 - MCP retirement and Vercel project links
+
+Prompt: Remove the MCP section because Claude/Cursor MCP does not count, and fix Vercel systems not showing.
+Change: Removed the bundled Cursor MCP descriptor, retired MCP/Claude provider IDs in descriptor loading, saved-state snapshots, and scan pruning, removed MCP fixtures/UI catalog entries, and added Vercel `.vercel/project.json` linked-project detection with fingerprint-only project/org IDs.
+Files touched: `src\App.tsx`, `src-tauri\src\`, `src-tauri\resources\providers\`, `tests\fixtures\`, `README.md`, `HANDOFF.md`, `AUDIT_BOOK.md`, `LOG_BOOK.md`, `docs\`, `e2e\traceability.md`, `MANUAL_TASKS.md`
+Verification: `npm test`, `npm run build`, `cd src-tauri; cargo test`, `cd src-tauri; cargo clippy -- -D warnings`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, `npm run tauri build`, release CLI `status`, release CLI `providers --json`, Browser DOM/search/console smoke, Playwright screenshot fallback, and source grep for removed MCP catalog entries.
+Notes: Vercel CLI project linking is detected from local `.vercel/project.json` files; raw project/org IDs are not persisted.
