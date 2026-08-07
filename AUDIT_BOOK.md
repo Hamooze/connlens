@@ -1,7 +1,7 @@
 # Audit Book
 
 Project: Connlens
-Last audit: 2026-08-07 02:50 +03:00
+Last audit: 2026-08-07 12:12 +03:00
 Current branch: codex/connlens-start
 Remote: https://github.com/Hamooze/connlens
 
@@ -11,12 +11,15 @@ Runnable ConnLens alpha foundation in `code-space/`: Tauri 2 desktop app, dark R
 
 ## Last Code Changed
 
-Replaced the default Tauri hotbar/tray/executable icon with the ConnLens share mark.
+Registered ConnLens as a Windows Start Menu app for repo-run release builds so Windows Search finds it under Apps.
 
 ## Verification
 
 - `npm test` passed: 1 file, 2 tests.
 - `npm run build` passed.
+- `npm run register:start-menu` passed and created `%APPDATA%\Microsoft\Windows\Start Menu\Programs\ConnLens.lnk`.
+- `Get-StartApps` returned `ConnLens` with AppID pointing at `src-tauri\target\release\connlens.exe`.
+- Shortcut target/icon inspection passed, and launching via the shortcut started ConnLens as PID `25764`.
 - `npm run tauri icon -- src-tauri\icon-source.svg` passed and regenerated the platform icon pack.
 - 32px icon visual check passed: icon renders as the ConnLens share mark.
 - `npm run tauri build` passed and refreshed `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`.

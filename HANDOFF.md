@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-08-07 02:50 +03:00
+Last updated: 2026-08-07 12:12 +03:00
 Project: Connlens
 Theme: ConnLens dark utility alpha
 Current branch: codex/connlens-start
@@ -20,9 +20,9 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 
 ## Latest Push
 
-- Latest change: replaced the default Tauri hotbar/tray/executable icon with the ConnLens share mark.
-- Release app is rebuilt and running from `src-tauri\target\release\connlens.exe` as PID `30056`.
-- Latest focused checks: Tauri icon generation from `src-tauri\icon-source.svg`, 32px icon visual check, and `npm run tauri build`.
+- Latest change: added repeatable Windows Start Menu registration so ConnLens appears under Windows Search Apps for repo-run builds.
+- Release app is running from `src-tauri\target\release\connlens.exe` as PID `25764`.
+- Latest focused checks: `npm run register:start-menu`, `Get-StartApps`, shortcut target/icon inspection, and shortcut launch.
 
 ## Major Updates
 
@@ -32,6 +32,7 @@ Installer: `src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe`
 - Added Tauri IPC commands, tray/menu scaffolding, release CLI commands, and the React popover/settings UI.
 - Reworked the UI into the dark compact desktop-tool style from the requested reference, including provider logos, a popular-provider rail, draggable titlebar, and X close button.
 - Replaced the default Tauri app icon with a ConnLens share-mark icon generated from `src-tauri\icon-source.svg`.
+- Added `scripts\register_start_menu_shortcut.ps1` and `npm run register:start-menu` to register repo-run release builds in the Windows Start Menu.
 - Removed the user-facing Hide feature and retired MCP/Claude provider IDs so existing saved rows are hidden and pruned on scan.
 - Added account-label auto-detection across token/config/profile rows; Vercel linked-project scanning remains limited to explicitly configured project roots only, while regular access rows prefer connected user, team, org, tenant, AWS SSO account, role, or account labels when available.
 - Added `user_id`/`userId` account-label fallback and automatic cleanup for stale Vercel linked-project rows plus superseded fingerprint fallback rows from the same source file.

@@ -137,3 +137,10 @@ Prompt: Identify whether the hotbar icon was custom; if not, use the ConnLens to
 Change: Confirmed the previous blue/yellow hotbar icon was the default Tauri icon, added a reproducible ConnLens share-mark SVG source, regenerated the platform icon pack, and rebuilt/relaunched the release executable.
 Files touched: `src-tauri\icon-source.svg`, `src-tauri\icons\*`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
 Verification: `npm run tauri icon -- src-tauri\icon-source.svg`, 32px icon visual check, `npm run tauri build`, and release relaunch.
+
+## 2026-08-07 12:12 - Windows Search app registration
+
+Prompt: Windows Search only found the ConnLens folder, not the app.
+Change: Created a Start Menu shortcut pointing to the repo release executable, added a repeatable `scripts\register_start_menu_shortcut.ps1`, and exposed it as `npm run register:start-menu`.
+Files touched: `scripts\register_start_menu_shortcut.ps1`, `package.json`, `README.md`, `HANDOFF.md`, `LOG_BOOK.md`, `AUDIT_BOOK.md`
+Verification: `npm run register:start-menu`, `Get-StartApps` showing `ConnLens`, shortcut target/icon inspection, and shortcut launch to PID `25764`.

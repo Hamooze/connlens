@@ -24,6 +24,7 @@ npm test
 npm run build
 npm run tauri dev
 npm run tauri build
+npm run register:start-menu
 cd src-tauri; cargo test
 powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1
 ```
@@ -33,6 +34,8 @@ Windows installer artifact:
 ```powershell
 src-tauri\target\release\bundle\nsis\ConnLens_0.1.0_x64-setup.exe
 ```
+
+For local repo-run builds that are not installed through NSIS, `npm run register:start-menu` creates `%APPDATA%\Microsoft\Windows\Start Menu\Programs\ConnLens.lnk` pointing at `src-tauri\target\release\connlens.exe`. This makes ConnLens appear under Windows Search Apps instead of only finding the project folder.
 
 Fixture scan setup for local verification:
 

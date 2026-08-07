@@ -9,7 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "register:start-menu": "powershell -ExecutionPolicy Bypass -File scripts\\register_start_menu_shortcut.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
