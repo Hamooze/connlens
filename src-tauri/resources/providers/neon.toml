@@ -5,19 +5,26 @@ dashboard_url = "https://console.neon.tech"
 [[locations]]
 path = "%APPDATA%/neonctl/credentials.json"
 format = "json"
-strategy = "token_file"
+strategy = "neon_auth"
 source_type = "config_file"
 
 [[locations]]
 path = "%USERPROFILE%/.config/neonctl/credentials.json"
 format = "json"
-strategy = "token_file"
+strategy = "neon_auth"
 source_type = "config_file"
+
+[[locations]]
+path = "%USERPROFILE%/.config/neon/credentials*.json"
+format = "json"
+strategy = "neon_auth"
+source_type = "config_file"
+confidence = "profile"
 
 [[locations]]
 path = "%USERPROFILE%/.neon/credentials.json"
 format = "json"
-strategy = "token_file"
+strategy = "neon_auth"
 source_type = "config_file"
 
 [[env_vars]]

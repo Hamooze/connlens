@@ -5,26 +5,61 @@ dashboard_url = "https://vercel.com"
 [[locations]]
 path = "%APPDATA%/com.vercel.cli/auth.json"
 format = "json"
-strategy = "token_file"
+strategy = "vercel_auth"
 source_type = "config_file"
 
 [[locations]]
 path = "%LOCALAPPDATA%/com.vercel.cli/auth.json"
 format = "json"
-strategy = "token_file"
+strategy = "vercel_auth"
 source_type = "config_file"
 
 [[locations]]
 path = "%USERPROFILE%/.local/share/com.vercel.cli/auth.json"
 format = "json"
-strategy = "token_file"
+strategy = "vercel_auth"
 source_type = "config_file"
 
 [[locations]]
 path = "%USERPROFILE%/.vercel/auth.json"
 format = "json"
-strategy = "token_file"
+strategy = "vercel_auth"
 source_type = "config_file"
+
+[[locations]]
+path = "%APPDATA%/VercelProfiles/*/auth.json"
+format = "json"
+strategy = "vercel_auth"
+source_type = "config_file"
+confidence = "profile"
+
+[[locations]]
+path = "%APPDATA%/xdg.data/com.vercel.cli/auth.json"
+format = "json"
+strategy = "vercel_auth"
+source_type = "config_file"
+confidence = "xdg"
+
+[[locations]]
+path = "%APPDATA%/xdg.config/com.vercel.cli/auth.json"
+format = "json"
+strategy = "vercel_auth"
+source_type = "config_file"
+confidence = "xdg"
+
+[[locations]]
+path = "%LOCALAPPDATA%/xdg.data/com.vercel.cli/auth.json"
+format = "json"
+strategy = "vercel_auth"
+source_type = "config_file"
+confidence = "xdg"
+
+[[locations]]
+path = "%LOCALAPPDATA%/xdg.config/com.vercel.cli/auth.json"
+format = "json"
+strategy = "vercel_auth"
+source_type = "config_file"
+confidence = "xdg"
 
 [[locations]]
 path = "%APPDATA%/com.vercel.cli/config.json"

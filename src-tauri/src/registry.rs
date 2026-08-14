@@ -136,6 +136,67 @@ fn is_superseded_fingerprint_fallback(
         && seen_source_paths.contains(&(connection.provider.clone(), path.clone()))
 }
 
+fn is_superseded_raw_identity(
+    connection: &Connection,
+    seen_source_paths: &BTreeSet<(String, String)>,
+) -> bool {
+    let Some(path) = connection.source.path.as_ref() else {
+        return false;
+    };
+
+    is_raw_identity_label(&connection.provider, &connection.identity.label)
+        && seen_source_paths.contains(&(connection.provider.clone(), path.clone()))
+}
+
+fn is_superseded_generic_identity(
+    connection: &Connection,
+    seen_friendly_source_paths: &BTreeSet<(String, String)>,
+) -> bool {
+    let Some(path) = connection.source.path.as_ref() else {
+        return false;
+    };
+
+    is_generic_identity_label(&connection.provider, &connection.identity.label)
+        && seen_friendly_source_paths.contains(&(connection.provider.clone(), path.clone()))
+}
+
+fn is_friendly_identity_label(provider: &str, label: &str) -> bool {
+    !is_raw_identity_label(provider, label) && !is_generic_identity_label(provider, label)
+}
+
+fn is_generic_identity_label(provider: &str, label: &str) -> bool {
+    let label = label.trim();
+    matches!(
+        (provider, label),
+        ("neon", "Neon account") | ("vercel", "Vercel account")
+    )
+}
+
+fn is_raw_identity_label(provider: &str, label: &str) -> bool {
+    let label = label.trim();
+    match provider {
+        "neon" => is_uuid_like(label),
+        "vercel" => {
+            label.starts_with("team_")
+                || label.starts_with("usr_")
+                || (label.len() >= 20
+                    && label.len() <= 40
+                    && label.chars().all(|ch| ch.is_ascii_alphanumeric()))
+        }
+        _ => false,
+    }
+}
+
+fn is_uuid_like(value: &str) -> bool {
+    let parts = value.split('-').collect::<Vec<_>>();
+    let expected = [8, 4, 4, 4, 12];
+    parts.len() == expected.len()
+        && parts
+            .iter()
+            .zip(expected)
+            .all(|(part, len)| part.len() == len && part.chars().all(|ch| ch.is_ascii_hexdigit()))
+}
+
 fn backup_path(home: &Path) -> PathBuf {
     home.join("registry.json.bak")
 }
@@ -250,6 +311,7 @@ impl Registry {
         let mut changes = ChangeSet::default();
         let mut seen_ids = BTreeSet::new();
         let mut seen_source_paths = BTreeSet::new();
+        let mut seen_friendly_source_paths = BTreeSet::new();
         let old_by_id = self
             .file
             .connections
@@ -267,7 +329,11 @@ impl Registry {
             let id = connection_id(&detected);
             seen_ids.insert(id.clone());
             if let Some(path) = detected.source.path.as_deref() {
-                seen_source_paths.insert((detected.provider.clone(), path.to_string()));
+                let source_key = (detected.provider.clone(), path.to_string());
+                seen_source_paths.insert(source_key.clone());
+                if is_friendly_identity_label(&detected.provider, &detected.identity.label) {
+                    seen_friendly_source_paths.insert(source_key);
+                }
             }
 
             if let Some(existing) = old_by_id.get(&id) {
@@ -324,6 +390,8 @@ impl Registry {
             if !seen_ids.contains(&existing.id) && in_scope {
                 if is_ephemeral_project_link(existing)
                     || is_superseded_fingerprint_fallback(existing, &seen_source_paths)
+                    || is_superseded_raw_identity(existing, &seen_source_paths)
+                    || is_superseded_generic_identity(existing, &seen_friendly_source_paths)
                 {
                     continue;
                 }
@@ -691,6 +759,69 @@ mod tests {
         registry.diff(vec![user], Some("neon"));
         assert_eq!(registry.file.connections.len(), 1);
         assert_eq!(registry.file.connections[0].identity.label, "usr_fixture_1");
+    }
+
+    #[test]
+    fn raw_identity_rows_are_pruned_when_source_has_clean_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let source = "C:/Users/dev/.config/neonctl/credentials.json";
+        let mut raw = detected(
+            "bd340f52-aba8-42aa-a283-9f1f026e7eeb",
+            "https://console.neon.tech",
+            source,
+            Some("sha256:old"),
+        );
+        raw.provider = "neon".to_string();
+        raw.provider_name = "Neon DB".to_string();
+        let mut clean = detected(
+            "Neon account",
+            "https://console.neon.tech",
+            source,
+            Some("sha256:new"),
+        );
+        clean.provider = "neon".to_string();
+        clean.provider_name = "Neon DB".to_string();
+
+        registry.diff(vec![raw], Some("neon"));
+        assert_eq!(registry.file.connections.len(), 1);
+
+        registry.diff(vec![clean], Some("neon"));
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections[0].identity.label, "Neon account");
+    }
+
+    #[test]
+    fn generic_identity_rows_are_pruned_when_source_has_clean_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let source = "C:/Users/dev/.config/neonctl/credentials.json";
+        let mut generic = detected(
+            "Neon account",
+            "https://console.neon.tech",
+            source,
+            Some("sha256:old"),
+        );
+        generic.provider = "neon".to_string();
+        generic.provider_name = "Neon DB".to_string();
+        let mut clean = detected(
+            "neon.profile@example.test",
+            "https://console.neon.tech",
+            source,
+            Some("sha256:new"),
+        );
+        clean.provider = "neon".to_string();
+        clean.provider_name = "Neon DB".to_string();
+
+        registry.diff(vec![generic], Some("neon"));
+        assert_eq!(registry.file.connections.len(), 1);
+
+        registry.diff(vec![clean], Some("neon"));
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(
+            registry.file.connections[0].identity.label,
+            "neon.profile@example.test"
+        );
     }
 
     #[test]

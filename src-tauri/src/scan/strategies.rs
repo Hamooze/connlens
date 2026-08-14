@@ -247,6 +247,41 @@ fn insert_if_string(meta: &mut BTreeMap<String, Value>, key: &str, value: Option
     }
 }
 
+fn is_uuid_like(value: &str) -> bool {
+    let parts = value.split('-').collect::<Vec<_>>();
+    let expected = [8, 4, 4, 4, 12];
+    parts.len() == expected.len()
+        && parts
+            .iter()
+            .zip(expected)
+            .all(|(part, len)| part.len() == len && part.chars().all(|ch| ch.is_ascii_hexdigit()))
+}
+
+fn is_vercel_id_like(value: &str) -> bool {
+    value.starts_with("team_")
+        || value.starts_with("usr_")
+        || (value.len() >= 20
+            && value.len() <= 40
+            && value.chars().all(|ch| ch.is_ascii_alphanumeric()))
+}
+
+fn clean_account_label(provider: &str, value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let raw_id = match provider {
+        "neon" => is_uuid_like(trimmed),
+        "vercel" => is_vercel_id_like(trimmed),
+        _ => false,
+    };
+    (!raw_id).then(|| trimmed.to_string())
+}
+
+fn first_clean_string_for_keys(provider: &str, value: &Value, keys: &[&str]) -> Option<String> {
+    first_string_for_keys(value, keys).and_then(|label| clean_account_label(provider, label))
+}
+
 pub mod github {
     use super::*;
 
@@ -371,7 +406,7 @@ pub mod tokens {
         )]
     }
 
-    fn token_value(value: &Value) -> Option<&str> {
+    pub(super) fn token_value(value: &Value) -> Option<&str> {
         find_token(value, 0)
     }
 
@@ -406,6 +441,513 @@ pub mod tokens {
             Value::Array(values) => values.iter().find_map(|value| find_token(value, depth + 1)),
             _ => None,
         }
+    }
+}
+
+pub mod neon {
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    #[derive(Default)]
+    struct NeonProfile {
+        name: Option<String>,
+        label: Option<String>,
+    }
+
+    pub fn auth_file(
+        descriptor: &Descriptor,
+        location: &Location,
+        path: &Path,
+        value: &Value,
+    ) -> Vec<DetectedConnection> {
+        let Some(token) = super::tokens::token_value(value).filter(|token| !token.is_empty())
+        else {
+            return Vec::new();
+        };
+
+        let id_token_payload = value
+            .get("id_token")
+            .and_then(Value::as_str)
+            .and_then(jwt_payload);
+        let user_id = value
+            .get("user_id")
+            .or_else(|| value.get("userId"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                id_token_payload
+                    .as_ref()
+                    .and_then(|payload| payload.get("sub"))
+                    .and_then(Value::as_str)
+            });
+        let profile = profile_for_credentials(path, user_id);
+
+        let label = profile
+            .label
+            .clone()
+            .or_else(|| id_token_payload.as_ref().and_then(friendly_label))
+            .or_else(|| friendly_label(value))
+            .or_else(|| {
+                profile
+                    .name
+                    .as_ref()
+                    .filter(|name| !name.eq_ignore_ascii_case("default"))
+                    .cloned()
+            })
+            .unwrap_or_else(|| "Neon account".to_string());
+        let fingerprint = user_id
+            .or_else(|| value.get("refresh_token").and_then(Value::as_str))
+            .unwrap_or(token);
+        let scope = profile
+            .name
+            .as_ref()
+            .map(|name| {
+                if name.eq_ignore_ascii_case("default") {
+                    "Default profile".to_string()
+                } else {
+                    format!("profile: {name}")
+                }
+            })
+            .or_else(|| {
+                value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(|kind| match kind {
+                        "oauth" => "OAuth profile".to_string(),
+                        other => format!("{other} profile"),
+                    })
+            })
+            .or_else(|| location.scope.clone())
+            .or_else(|| Some("Neon account".to_string()));
+
+        let mut meta = BTreeMap::from([("kind".to_string(), json!("auth_profile"))]);
+        if let Some(profile_name) = profile.name {
+            meta.insert("profile".to_string(), Value::String(profile_name));
+        }
+        if let Some(user_id) = user_id {
+            meta.insert(
+                "userIdFingerprint".to_string(),
+                Value::String(secutil::fingerprint(user_id.as_bytes())),
+            );
+        }
+        if let Some(expires_at) = value.get("expires_at").and_then(Value::as_i64) {
+            meta.insert("expiresAt".to_string(), json!(expires_at));
+        }
+        if let Some(token_type) = value.get("token_type").and_then(Value::as_str) {
+            meta.insert(
+                "tokenType".to_string(),
+                Value::String(token_type.to_string()),
+            );
+        }
+        if let Some(confidence) = &location.confidence {
+            meta.insert("confidence".to_string(), Value::String(confidence.clone()));
+        }
+
+        let mut row = super::detected(
+            descriptor,
+            label,
+            descriptor.dashboard_url.clone(),
+            scope,
+            path,
+            Some(secutil::fingerprint(fingerprint.as_bytes())),
+            meta,
+        );
+        row.identity.is_active_identity = true;
+        vec![row]
+    }
+
+    fn friendly_label(value: &Value) -> Option<String> {
+        first_clean_string_for_keys(
+            "neon",
+            value,
+            &[
+                "name",
+                "email",
+                "preferred_username",
+                "nickname",
+                "username",
+                "login",
+                "displayName",
+                "display_name",
+            ],
+        )
+    }
+
+    fn profile_for_credentials(path: &Path, user_id: Option<&str>) -> NeonProfile {
+        candidate_profiles(path)
+            .into_iter()
+            .find_map(|profiles_path| read_profile_info(&profiles_path, path, user_id))
+            .unwrap_or_default()
+    }
+
+    fn candidate_profiles(path: &Path) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Some(parent) = path.parent() {
+            candidates.push(parent.join("profiles.json"));
+            if parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("neonctl"))
+            {
+                if let Some(config_root) = parent.parent() {
+                    candidates.push(config_root.join("neon").join("profiles.json"));
+                }
+            }
+        }
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            candidates.push(PathBuf::from(profile).join(".config/neon/profiles.json"));
+        }
+        dedupe_paths(candidates)
+    }
+
+    fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+        let mut seen = std::collections::BTreeSet::new();
+        paths
+            .into_iter()
+            .filter(|path| seen.insert(path.display().to_string().to_ascii_lowercase()))
+            .collect()
+    }
+
+    fn read_profile_info(
+        profiles_path: &Path,
+        credentials_path: &Path,
+        user_id: Option<&str>,
+    ) -> Option<NeonProfile> {
+        let metadata = fs::metadata(profiles_path).ok()?;
+        if metadata.len() > 1_048_576 {
+            return None;
+        }
+        let value: Value = serde_json::from_str(&fs::read_to_string(profiles_path).ok()?).ok()?;
+        let profiles = value.get("profiles").and_then(Value::as_object)?;
+        let mut matching_profile = NeonProfile::default();
+        let mut label_for_user = None;
+
+        for (name, profile) in profiles {
+            let profile_label = profile
+                .get("label")
+                .and_then(Value::as_str)
+                .and_then(|label| clean_account_label("neon", label.to_string()));
+            let profile_user_id = profile.get("userId").and_then(Value::as_str);
+            if label_for_user.is_none()
+                && user_id.is_some()
+                && user_id == profile_user_id
+                && profile_label.is_some()
+            {
+                label_for_user = profile_label.clone();
+            }
+
+            let Some(credentials) = profile.get("credentials").and_then(Value::as_str) else {
+                continue;
+            };
+            let candidate = profiles_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(credentials);
+            if !same_path(credentials_path, &candidate) {
+                continue;
+            }
+
+            matching_profile.name = Some(name.to_string());
+            matching_profile.label = profile_label;
+        }
+
+        if matching_profile.label.is_none() {
+            matching_profile.label = label_for_user;
+        }
+        (matching_profile.name.is_some() || matching_profile.label.is_some())
+            .then_some(matching_profile)
+    }
+
+    fn same_path(left: &Path, right: &Path) -> bool {
+        canonical_or_original(left) == canonical_or_original(right)
+    }
+
+    fn canonical_or_original(path: &Path) -> PathBuf {
+        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    fn jwt_payload(token: &str) -> Option<Value> {
+        let payload = token.split('.').nth(1)?;
+        let bytes = URL_SAFE_NO_PAD.decode(payload.as_bytes()).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+}
+
+pub mod shopify {
+    use super::*;
+
+    pub fn account_info(
+        descriptor: &Descriptor,
+        location: &Location,
+        path: &Path,
+        value: &Value,
+    ) -> Vec<DetectedConnection> {
+        let Some(accounts) = value.as_object() else {
+            return Vec::new();
+        };
+
+        accounts
+            .iter()
+            .filter_map(|(user_id, account)| {
+                let info = account.get("info").unwrap_or(account);
+                let label = first_account_label(info)
+                    .or_else(|| first_account_label(account))
+                    .unwrap_or_else(|| user_id.to_string());
+                if label.trim().is_empty() {
+                    return None;
+                }
+
+                let account_type = info
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("ShopifyAccount");
+                let scope = match account_type {
+                    "ServiceAccount" => "Service account",
+                    _ => "Shopify account",
+                };
+                let mut meta = BTreeMap::from([
+                    ("kind".to_string(), json!("account_info")),
+                    ("accountType".to_string(), json!(account_type)),
+                    (
+                        "userIdFingerprint".to_string(),
+                        json!(secutil::fingerprint(user_id.as_bytes())),
+                    ),
+                ]);
+                if let Some(loaded_at) = account.get("loadedAt").and_then(Value::as_str) {
+                    meta.insert("loadedAt".to_string(), Value::String(loaded_at.to_string()));
+                }
+                if let Some(confidence) = &location.confidence {
+                    meta.insert("confidence".to_string(), Value::String(confidence.clone()));
+                }
+
+                let fingerprint =
+                    secutil::fingerprint(format!("shopify-account:{user_id}:{label}").as_bytes());
+                let mut row = super::detected(
+                    descriptor,
+                    label,
+                    descriptor.dashboard_url.clone(),
+                    Some(scope.to_string()),
+                    path,
+                    Some(fingerprint),
+                    meta,
+                );
+                row.identity.is_active_identity = true;
+                Some(row)
+            })
+            .collect()
+    }
+}
+
+pub mod vercel {
+    use super::*;
+    use std::fs;
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct VercelProfile {
+        label: Option<String>,
+        scope: Option<String>,
+        resolved_by_api: bool,
+    }
+
+    pub fn auth_file(
+        descriptor: &Descriptor,
+        location: &Location,
+        path: &Path,
+        value: &Value,
+        probes_enabled: bool,
+    ) -> Vec<DetectedConnection> {
+        let Some(token) = vercel_token(value).filter(|token| !token.is_empty()) else {
+            return Vec::new();
+        };
+
+        let config = read_sibling_config(path);
+        let profile = profile_alias(path);
+        let user_id = value.get("userId").and_then(Value::as_str);
+        let current_team = config
+            .as_ref()
+            .and_then(|config| config.get("currentTeam"))
+            .and_then(Value::as_str);
+        let fingerprint = secutil::fingerprint(token.as_bytes());
+        let api_profile = if probes_enabled {
+            resolve_profile(token, current_team)
+        } else {
+            VercelProfile::default()
+        };
+        let label = api_profile
+            .label
+            .clone()
+            .or_else(|| primary_label(value))
+            .or_else(|| profile.clone())
+            .unwrap_or_else(|| "Vercel account".to_string());
+        let scope = api_profile
+            .scope
+            .clone()
+            .or_else(|| {
+                profile.as_ref().map(|profile| {
+                    if *profile == label {
+                        "Vercel profile".to_string()
+                    } else {
+                        format!("profile: {profile}")
+                    }
+                })
+            })
+            .or_else(|| current_team.map(|_| "Team context".to_string()))
+            .or_else(|| Some("Vercel account".to_string()));
+        let mut meta = BTreeMap::from([("kind".to_string(), json!("auth_profile"))]);
+        if let Some(profile) = profile {
+            meta.insert("profile".to_string(), Value::String(profile));
+        }
+        if let Some(user_id) = user_id {
+            meta.insert(
+                "userIdFingerprint".to_string(),
+                Value::String(secutil::fingerprint(user_id.as_bytes())),
+            );
+        }
+        if let Some(current_team) = current_team {
+            meta.insert(
+                "teamFingerprint".to_string(),
+                Value::String(secutil::fingerprint(current_team.as_bytes())),
+            );
+        }
+        if let Some(expires_at) = value.get("expiresAt").and_then(Value::as_i64) {
+            meta.insert("expiresAt".to_string(), json!(expires_at));
+        }
+        if api_profile.resolved_by_api {
+            meta.insert(
+                "resolvedBy".to_string(),
+                Value::String("vercel_api".to_string()),
+            );
+        }
+        if let Some(confidence) = &location.confidence {
+            meta.insert("confidence".to_string(), Value::String(confidence.clone()));
+        }
+
+        vec![super::detected(
+            descriptor,
+            label,
+            descriptor.dashboard_url.clone(),
+            scope,
+            path,
+            Some(fingerprint),
+            meta,
+        )]
+    }
+
+    fn vercel_token(value: &Value) -> Option<&str> {
+        value
+            .get("token")
+            .or_else(|| value.get("accessToken"))
+            .or_else(|| value.get("access_token"))
+            .and_then(Value::as_str)
+    }
+
+    fn primary_label(value: &Value) -> Option<String> {
+        first_clean_string_for_keys(
+            "vercel",
+            value,
+            &[
+                "email",
+                "user_email",
+                "username",
+                "login",
+                "name",
+                "displayName",
+                "display_name",
+                "teamName",
+                "team_name",
+                "teamSlug",
+                "team_slug",
+                "orgName",
+                "org_name",
+                "organizationName",
+                "organization_name",
+            ],
+        )
+    }
+
+    fn resolve_profile(token: &str, current_team: Option<&str>) -> VercelProfile {
+        let Ok(client) = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(4))
+            .user_agent("ConnLens/0.1 local-enrichment")
+            .build()
+        else {
+            return VercelProfile::default();
+        };
+
+        let label = get_json(&client, "https://api.vercel.com/v2/user", token)
+            .and_then(|value| value.get("user").cloned().or(Some(value)))
+            .and_then(|value| friendly_api_label(&value));
+        let scope = current_team.and_then(|team| resolve_team_label(&client, token, team));
+        VercelProfile {
+            resolved_by_api: label.is_some() || scope.is_some(),
+            label,
+            scope,
+        }
+    }
+
+    fn get_json(client: &reqwest::blocking::Client, url: &str, token: &str) -> Option<Value> {
+        let response = client.get(url).bearer_auth(token).send().ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response.json::<Value>().ok()
+    }
+
+    fn resolve_team_label(
+        client: &reqwest::blocking::Client,
+        token: &str,
+        current_team: &str,
+    ) -> Option<String> {
+        let value = get_json(client, "https://api.vercel.com/v2/teams?limit=100", token)?;
+        let teams = value
+            .get("teams")
+            .and_then(Value::as_array)
+            .or_else(|| value.as_array())?;
+        teams
+            .iter()
+            .find(|team| {
+                team.get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id == current_team)
+            })
+            .and_then(friendly_api_label)
+    }
+
+    fn friendly_api_label(value: &Value) -> Option<String> {
+        first_clean_string_for_keys(
+            "vercel",
+            value,
+            &[
+                "name",
+                "username",
+                "slug",
+                "email",
+                "displayName",
+                "display_name",
+            ],
+        )
+    }
+
+    fn profile_alias(path: &Path) -> Option<String> {
+        let profile = path.parent()?.file_name()?.to_str()?;
+        match profile {
+            "com.vercel.cli" | ".vercel" => None,
+            value if value.trim().is_empty() => None,
+            value => Some(value.to_string()),
+        }
+    }
+
+    fn read_sibling_config(path: &Path) -> Option<Value> {
+        let config_path = path.with_file_name("config.json");
+        let metadata = fs::metadata(&config_path).ok()?;
+        if metadata.len() > 1_048_576 {
+            return None;
+        }
+        fs::read_to_string(config_path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
     }
 }
 
@@ -813,6 +1355,8 @@ pub mod envvars {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
     fn descriptor(id: &str, name: &str) -> Descriptor {
         Descriptor {
             id: id.to_string(),
@@ -822,6 +1366,12 @@ mod tests {
             env_vars: Vec::new(),
             locations: Vec::new(),
         }
+    }
+
+    fn unsigned_jwt(payload: Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
+        format!("{header}.{payload}.")
     }
 
     #[test]
@@ -860,6 +1410,134 @@ mod tests {
     }
 
     #[test]
+    fn shopify_account_info_uses_cached_email_label() {
+        let mut descriptor = descriptor("shopify", "Shopify");
+        descriptor.dashboard_url = Some("https://admin.shopify.com".to_string());
+        let value = serde_json::json!({
+            "user-uuid-123": {
+                "info": {
+                    "type": "UserAccount",
+                    "email": "shopify.user@example.test"
+                },
+                "loadedAt": "2026-08-08T22:33:49.604Z"
+            }
+        });
+        let rows = shopify::account_info(
+            &descriptor,
+            &Location {
+                path: "config.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "shopify_account_info".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: Some("account_cache".to_string()),
+            },
+            Path::new("shopify-app-account-info-nodejs/Config/config.json"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "shopify.user@example.test");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("Shopify account"));
+        assert_eq!(
+            rows[0].identity.host.as_deref(),
+            Some("https://admin.shopify.com")
+        );
+        assert!(rows[0].identity.is_active_identity);
+        assert!(rows[0]
+            .meta
+            .get("userIdFingerprint")
+            .and_then(Value::as_str)
+            .unwrap()
+            .starts_with("sha256:"));
+        assert!(!format!("{rows:?}").contains("user-uuid-123"));
+    }
+
+    #[test]
+    fn vercel_profile_auth_uses_profile_alias_and_sibling_team() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join("VercelProfiles").join("barmous");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let auth_path = profile_dir.join("auth.json");
+        std::fs::write(
+            profile_dir.join("config.json"),
+            serde_json::json!({"currentTeam": "team_fixture_123"}).to_string(),
+        )
+        .unwrap();
+
+        let mut descriptor = descriptor("vercel", "Vercel");
+        descriptor.dashboard_url = Some("https://vercel.com".to_string());
+        let value = serde_json::json!({
+            "token": "vercel_secret",
+            "userId": "usr_fixture_123",
+            "refreshToken": "refresh_secret",
+            "expiresAt": 1786257099
+        });
+        let rows = vercel::auth_file(
+            &descriptor,
+            &Location {
+                path: "auth.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "vercel_auth".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: Some("profile".to_string()),
+            },
+            &auth_path,
+            &value,
+            false,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "barmous");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("Vercel profile"));
+        assert_eq!(rows[0].identity.host.as_deref(), Some("https://vercel.com"));
+        assert_eq!(
+            rows[0].meta.get("profile").and_then(Value::as_str),
+            Some("barmous")
+        );
+        assert!(rows[0]
+            .meta
+            .get("userIdFingerprint")
+            .and_then(Value::as_str)
+            .unwrap()
+            .starts_with("sha256:"));
+        assert!(!format!("{rows:?}").contains("vercel_secret"));
+        assert!(!format!("{rows:?}").contains("refresh_secret"));
+        assert!(!format!("{rows:?}").contains("usr_fixture_123"));
+        assert!(!format!("{rows:?}").contains("team_fixture_123"));
+    }
+
+    #[test]
+    fn vercel_auth_hides_raw_user_id_without_probe() {
+        let mut descriptor = descriptor("vercel", "Vercel");
+        descriptor.dashboard_url = Some("https://vercel.com".to_string());
+        let value = serde_json::json!({
+            "token": "vercel_secret",
+            "userId": "yX5emi3ltASINqWz4kLsYIPk",
+            "refreshToken": "refresh_secret"
+        });
+        let rows = vercel::auth_file(
+            &descriptor,
+            &Location {
+                path: "auth.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "vercel_auth".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: Some("xdg".to_string()),
+            },
+            Path::new("com.vercel.cli/auth.json"),
+            &value,
+            false,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "Vercel account");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("Vercel account"));
+        assert!(!format!("{rows:?}").contains("yX5emi3ltASINqWz4kLsYIPk"));
+    }
+
+    #[test]
     fn token_file_finds_snake_case_access_tokens() {
         let descriptor = descriptor("neon", "Neon DB");
         let value = serde_json::json!({
@@ -887,18 +1565,27 @@ mod tests {
     }
 
     #[test]
-    fn token_file_uses_user_id_when_email_is_missing() {
+    fn neon_auth_uses_jwt_claim_label() {
         let descriptor = descriptor("neon", "Neon DB");
+        let user_id = "00000000-1111-2222-3333-444444444444";
+        let id_token = unsigned_jwt(serde_json::json!({
+            "sub": user_id,
+            "name": "Neon User",
+            "email": "neon.user@example.test"
+        }));
         let value = serde_json::json!({
             "access_token": "napi_secret",
-            "user_id": "usr_fixture_1"
+            "refresh_token": "refresh_secret",
+            "id_token": id_token,
+            "type": "oauth",
+            "user_id": user_id
         });
-        let rows = tokens::token_file(
+        let rows = neon::auth_file(
             &descriptor,
             &Location {
                 path: "credentials.json".to_string(),
                 format: crate::scan::parsers::Format::Json,
-                strategy: "token_file".to_string(),
+                strategy: "neon_auth".to_string(),
                 source_type: "config_file".to_string(),
                 scope: None,
                 confidence: None,
@@ -907,8 +1594,167 @@ mod tests {
             &value,
         );
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].identity.label, "usr_fixture_1");
+        assert_eq!(rows[0].identity.label, "Neon User");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("OAuth profile"));
+        assert!(rows[0]
+            .meta
+            .get("userIdFingerprint")
+            .and_then(Value::as_str)
+            .unwrap()
+            .starts_with("sha256:"));
         assert!(!format!("{rows:?}").contains("napi_secret"));
+        assert!(!format!("{rows:?}").contains("refresh_secret"));
+        assert!(!format!("{rows:?}").contains(user_id));
+    }
+
+    #[test]
+    fn neon_auth_hides_uuid_when_claims_are_missing() {
+        let descriptor = descriptor("neon", "Neon DB");
+        let user_id = "00000000-1111-2222-3333-444444444444";
+        let value = serde_json::json!({
+            "access_token": "napi_secret",
+            "refresh_token": "refresh_secret",
+            "type": "oauth",
+            "user_id": user_id
+        });
+        let rows = neon::auth_file(
+            &descriptor,
+            &Location {
+                path: "credentials.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "neon_auth".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: None,
+            },
+            Path::new("credentials.json"),
+            &value,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "Neon account");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("OAuth profile"));
+        assert!(!format!("{rows:?}").contains("napi_secret"));
+        assert!(!format!("{rows:?}").contains("refresh_secret"));
+        assert!(!format!("{rows:?}").contains(user_id));
+    }
+
+    #[test]
+    fn neon_auth_uses_profile_label_for_default_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".config");
+        let neon_dir = config_dir.join("neon");
+        let neonctl_dir = config_dir.join("neonctl");
+        std::fs::create_dir_all(&neon_dir).unwrap();
+        std::fs::create_dir_all(&neonctl_dir).unwrap();
+        let credentials_path = neonctl_dir.join("credentials.json");
+        std::fs::write(&credentials_path, "{}").unwrap();
+        let user_id = "profile-user-fixture";
+        std::fs::write(
+            neon_dir.join("profiles.json"),
+            serde_json::json!({
+                "version": 1,
+                "profiles": {
+                    "DEFAULT": {"credentials": "../neonctl/credentials.json"},
+                    "nemu": {
+                        "credentials": "credentials.nemu.json",
+                        "label": "neon.profile@example.test",
+                        "userId": user_id
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut descriptor = descriptor("neon", "Neon DB");
+        descriptor.dashboard_url = Some("https://console.neon.tech".to_string());
+        let value = serde_json::json!({
+            "access_token": "napi_secret",
+            "refresh_token": "refresh_secret",
+            "type": "oauth",
+            "user_id": user_id
+        });
+        let rows = neon::auth_file(
+            &descriptor,
+            &Location {
+                path: "credentials.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "neon_auth".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: None,
+            },
+            &credentials_path,
+            &value,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "neon.profile@example.test");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("Default profile"));
+        assert_eq!(
+            rows[0].meta.get("profile").and_then(Value::as_str),
+            Some("DEFAULT")
+        );
+        assert!(!format!("{rows:?}").contains(user_id));
+    }
+
+    #[test]
+    fn neon_auth_uses_named_profile_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let neon_dir = dir.path().join(".config").join("neon");
+        std::fs::create_dir_all(&neon_dir).unwrap();
+        let credentials_path = neon_dir.join("credentials.nemu.json");
+        let user_id = "profile-user-fixture";
+        std::fs::write(
+            neon_dir.join("profiles.json"),
+            serde_json::json!({
+                "version": 1,
+                "profiles": {
+                    "nemu": {
+                        "credentials": "credentials.nemu.json",
+                        "label": "neon.profile@example.test",
+                        "userId": user_id
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut descriptor = descriptor("neon", "Neon DB");
+        descriptor.dashboard_url = Some("https://console.neon.tech".to_string());
+        let value = serde_json::json!({
+            "access_token": "napi_secret",
+            "refresh_token": "refresh_secret",
+            "type": "oauth",
+            "user_id": user_id
+        });
+        let rows = neon::auth_file(
+            &descriptor,
+            &Location {
+                path: "credentials.nemu.json".to_string(),
+                format: crate::scan::parsers::Format::Json,
+                strategy: "neon_auth".to_string(),
+                source_type: "config_file".to_string(),
+                scope: None,
+                confidence: Some("profile".to_string()),
+            },
+            &credentials_path,
+            &value,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].identity.label, "neon.profile@example.test");
+        assert_eq!(rows[0].identity.scope.as_deref(), Some("profile: nemu"));
+        assert_eq!(
+            rows[0].meta.get("profile").and_then(Value::as_str),
+            Some("nemu")
+        );
+        assert_eq!(
+            rows[0].meta.get("confidence").and_then(Value::as_str),
+            Some("profile")
+        );
+        assert!(!format!("{rows:?}").contains(user_id));
     }
 
     #[test]

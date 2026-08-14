@@ -9,6 +9,13 @@ strategy = "token_file"
 source_type = "config_file"
 confidence = "candidate"
 
+[[locations]]
+path = "%APPDATA%/shopify-app-account-info-nodejs/Config/config.json"
+format = "json"
+strategy = "shopify_account_info"
+source_type = "config_file"
+confidence = "account_cache"
+
 [[env_vars]]
 name = "SHOPIFY_CLI_AUTH_TOKEN"
 label = "Shopify CLI token"

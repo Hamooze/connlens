@@ -8,7 +8,7 @@ pub mod scan;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, PhysicalPosition, WebviewWindow};
+use tauri::{AppHandle, Manager, Monitor, PhysicalPosition, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt;
 
 fn toggle_popover(app: &AppHandle, tray_position: Option<PhysicalPosition<f64>>) {
@@ -31,7 +31,7 @@ fn position_popover(
     window: &WebviewWindow,
     tray_position: Option<PhysicalPosition<f64>>,
 ) -> tauri::Result<()> {
-    let Some(monitor) = window.current_monitor()? else {
+    let Some(monitor) = popover_monitor(window, tray_position)? else {
         return Ok(());
     };
     let size = window.outer_size()?;
@@ -39,15 +39,33 @@ fn position_popover(
     let margin = 10;
     let right = work_area.position.x + work_area.size.width as i32;
     let bottom = work_area.position.y + work_area.size.height as i32;
-    let preferred_x = tray_position
-        .map(|position| position.x.round() as i32 - size.width as i32 + 26)
-        .unwrap_or(right - size.width as i32 - margin);
     let min_x = work_area.position.x + margin;
     let max_x = right - size.width as i32 - margin;
-    let x = preferred_x.clamp(min_x, max_x.max(min_x));
+    let x = max_x.max(min_x);
     let y = bottom - size.height as i32 - margin;
     window.set_position(PhysicalPosition::new(x, y))?;
     Ok(())
+}
+
+fn popover_monitor(
+    window: &WebviewWindow,
+    tray_position: Option<PhysicalPosition<f64>>,
+) -> tauri::Result<Option<Monitor>> {
+    if let Some(position) = tray_position {
+        let x = position.x.round() as i32;
+        let y = position.y.round() as i32;
+        if let Some(monitor) = window.available_monitors()?.into_iter().find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            let right = position.x + size.width as i32;
+            let bottom = position.y + size.height as i32;
+            x >= position.x && x <= right && y >= position.y && y <= bottom
+        }) {
+            return Ok(Some(monitor));
+        }
+    }
+
+    window.current_monitor()
 }
 
 fn configure_tray(app: &AppHandle) -> tauri::Result<()> {

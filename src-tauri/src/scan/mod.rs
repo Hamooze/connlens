@@ -29,6 +29,7 @@ pub fn scan_and_persist(provider: Option<String>) -> Result<Snapshot, ErrorPaylo
         detect_descriptor(
             descriptor,
             &settings.project_roots,
+            settings.probes_enabled,
             &mut detected,
             &mut errors,
         );
@@ -49,6 +50,7 @@ pub fn scan_and_persist(provider: Option<String>) -> Result<Snapshot, ErrorPaylo
 fn detect_descriptor(
     descriptor: &Descriptor,
     project_roots: &[String],
+    probes_enabled: bool,
     detected: &mut Vec<DetectedConnection>,
     errors: &mut Vec<ProviderError>,
 ) {
@@ -67,7 +69,13 @@ fn detect_descriptor(
             }
             match parse(&path, location.format) {
                 Ok(doc) => {
-                    detected.extend(dispatch_strategy(descriptor, location, &path, &doc.value));
+                    detected.extend(dispatch_strategy(
+                        descriptor,
+                        location,
+                        &path,
+                        &doc.value,
+                        probes_enabled,
+                    ));
                 }
                 Err(err) => errors.push(ProviderError {
                     provider: descriptor.id.clone(),
@@ -101,15 +109,23 @@ fn dispatch_strategy(
     location: &Location,
     path: &Path,
     value: &serde_json::Value,
+    probes_enabled: bool,
 ) -> Vec<DetectedConnection> {
     match location.strategy.as_str() {
         "azure_profile" => strategies::profiles::azure_profile(descriptor, location, path, value),
         "docker_auths" => strategies::profiles::docker_auths(descriptor, location, path, value),
         "glab_config" => strategies::profiles::glab_config(descriptor, location, path, value),
         "gh_hosts" => strategies::github::gh_hosts(descriptor, location, path, value),
+        "neon_auth" => strategies::neon::auth_file(descriptor, location, path, value),
         "npmrc" => strategies::profiles::npmrc(descriptor, location, path, value),
         "profile_file" => strategies::profiles::profile_file(descriptor, location, path, value),
+        "shopify_account_info" => {
+            strategies::shopify::account_info(descriptor, location, path, value)
+        }
         "token_file" => strategies::tokens::token_file(descriptor, location, path, value),
+        "vercel_auth" => {
+            strategies::vercel::auth_file(descriptor, location, path, value, probes_enabled)
+        }
         "vercel_project" => strategies::profiles::vercel_project(descriptor, location, path, value),
         _ => Vec::new(),
     }
