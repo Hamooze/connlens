@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-08-16 05:41 +04:00
+Last updated: 2026-08-16 05:55 +04:00
 Project: Connlens
 Theme: ConnLens dark utility alpha
 Current branch: codex/connlens-start
@@ -22,7 +22,7 @@ Linux/macOS artifacts: produced by `.github/workflows/desktop-release.yml` on na
 
 ## Latest Push
 
-- Latest change: prepared the branch for GitHub publication and main merge with Windows/Linux/macOS build scripts/workflow, Azure profile detection cleanup, visible top provider-rail horizontal scrolling, and updated README/HANDOFF.
+- Latest change: prepared the branch for GitHub publication and main merge with Windows/Linux/macOS build scripts/workflow, Azure profile detection cleanup, visible top provider-rail horizontal scrolling, updated README/HANDOFF, and added Windows CI `ripgrep` installation for the secret-grep release step.
 - Release app was last relaunched from `src-tauri\target\release\connlens.exe` as PID `30452`; recheck PID live before assuming it is still running.
 - Latest focused checks: `cargo fmt`, `cargo test`, `cargo clippy -- -D warnings`, `npm run build`, `npm test`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, `npm run tauri:build:windows`.
 
@@ -42,6 +42,7 @@ Linux/macOS artifacts: produced by `.github/workflows/desktop-release.yml` on na
 - Added a Settings Start on startup toggle and enabled the tray Launch at startup menu item against the same native autostart state.
 - Moved the settings save status into the bottom settings footer and changed the label from `Saved` to `Save`.
 - Added cross-platform bundle targets, Linux/macOS-friendly path expansion fallbacks, process-env scanning on non-Windows, platform-specific package build scripts, and a native-runner GitHub Actions desktop release workflow.
+- Added Windows CI scan-tool installation so the desktop release workflow can run `scripts\secret_grep.ps1` on hosted Windows runners.
 - Fixed Azure CLI account detection for UTF-8-BOM `azureProfile.json` files, removed the generic Azure config fallback row, pruned stale generic Azure rows when a real account profile is detected, and added `connlens list --rescan` for explicit CLI refreshes.
 - Reverted the visible scrollbar styling for the main detected-items list while keeping the settings scrollbar styling, then restored a visible horizontal scrollbar for the top provider icon rail.
 - Added docs, ADRs, security notes, traceability, manual tasks, and visual evidence under `docs\ivw`.
