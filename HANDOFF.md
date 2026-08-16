@@ -1,11 +1,11 @@
 # Handoff
 
-Last updated: 2026-08-16 05:55 +04:00
+Last updated: 2026-08-16 06:14 +04:00
 Project: Connlens
 Theme: ConnLens dark utility alpha
-Current branch: codex/connlens-start
+Current branch: main
 GitHub remote: `https://github.com/Hamooze/connlens`
-Publish target: `origin/codex/connlens-start`, then `origin/main`
+Publish target: `origin/main` with `origin/codex/connlens-start` mirrored for continuity
 Run command: `npm run dev`
 Build command: `npm run build`
 Desktop build command: `npm run tauri build`
@@ -22,7 +22,7 @@ Linux/macOS artifacts: produced by `.github/workflows/desktop-release.yml` on na
 
 ## Latest Push
 
-- Latest change: prepared the branch for GitHub publication and main merge with Windows/Linux/macOS build scripts/workflow, Azure profile detection cleanup, visible top provider-rail horizontal scrolling, updated README/HANDOFF, and added Windows CI `ripgrep` installation for the secret-grep release step.
+- Latest change: prepared the branch for GitHub publication and main merge with Windows/Linux/macOS build scripts/workflow, Azure profile detection cleanup, visible top provider-rail horizontal scrolling, updated README/HANDOFF, Windows CI `ripgrep` installation, and a current `macos-15-intel` hosted-runner label for the Intel macOS release job.
 - Release app was last relaunched from `src-tauri\target\release\connlens.exe` as PID `30452`; recheck PID live before assuming it is still running.
 - Latest focused checks: `cargo fmt`, `cargo test`, `cargo clippy -- -D warnings`, `npm run build`, `npm test`, `powershell -ExecutionPolicy Bypass -File scripts\secret_grep.ps1`, `npm run tauri:build:windows`.
 
@@ -43,6 +43,7 @@ Linux/macOS artifacts: produced by `.github/workflows/desktop-release.yml` on na
 - Moved the settings save status into the bottom settings footer and changed the label from `Saved` to `Save`.
 - Added cross-platform bundle targets, Linux/macOS-friendly path expansion fallbacks, process-env scanning on non-Windows, platform-specific package build scripts, and a native-runner GitHub Actions desktop release workflow.
 - Added Windows CI scan-tool installation so the desktop release workflow can run `scripts\secret_grep.ps1` on hosted Windows runners.
+- Updated the Intel macOS release job from the stale `macos-13` runner label to `macos-15-intel`.
 - Fixed Azure CLI account detection for UTF-8-BOM `azureProfile.json` files, removed the generic Azure config fallback row, pruned stale generic Azure rows when a real account profile is detected, and added `connlens list --rescan` for explicit CLI refreshes.
 - Reverted the visible scrollbar styling for the main detected-items list while keeping the settings scrollbar styling, then restored a visible horizontal scrollbar for the top provider icon rail.
 - Added docs, ADRs, security notes, traceability, manual tasks, and visual evidence under `docs\ivw`.
@@ -61,7 +62,7 @@ Linux/macOS artifacts: produced by `.github/workflows/desktop-release.yml` on na
 - Complete real Windows Credential Manager names-only enumeration.
 - Add notify watcher orchestration and full toast/tray-position E2E flows.
 - Run the Windows VM/manual IVW checklist in `MANUAL_TASKS.md`.
-- Run the new desktop release workflow on GitHub and attach/verify Linux and macOS artifacts.
+- Watch the latest desktop release workflow on GitHub and verify draft-release artifacts after all native runners finish.
 - Add Apple Developer ID signing/notarization secrets if ConnLens needs polished public macOS distribution.
 - Add SCA/security packaging checks.
 

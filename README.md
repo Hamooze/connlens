@@ -3,7 +3,7 @@
 ConnLens is a local-first desktop tray/menu utility for seeing developer app connections on a developer machine. It supports Windows, Linux, and macOS through Tauri, defaults to a compact dark popover, scans local configuration files, stores metadata in the platform app-data directory or `CONNLENS_HOME`, and never persists raw secret values.
 
 GitHub: `https://github.com/Hamooze/connlens`
-Current development branch: `codex/connlens-start`
+Current development branch: `main`
 
 ## Providers
 
@@ -53,7 +53,7 @@ macOS artifacts are written under `src-tauri/target/<target-triple>/release/bund
 - macOS Apple Silicon: `.app` and `.dmg`
 - macOS Intel: `.app` and `.dmg`
 
-Run it from GitHub Actions with `workflow_dispatch`, or push a `v*` tag. The workflow creates/updates a draft GitHub release named `ConnLens v__VERSION__`. macOS artifacts are ad-hoc signed unless Apple Developer signing and notarization secrets are added later.
+Run it from GitHub Actions with `workflow_dispatch`, or push a `v*` tag. The workflow creates/updates a draft GitHub release named `ConnLens v__VERSION__`. macOS Apple Silicon uses the current default macOS ARM runner, and macOS Intel uses the current hosted Intel label `macos-15-intel`. macOS artifacts are ad-hoc signed unless Apple Developer signing and notarization secrets are added later.
 
 For local repo-run builds that are not installed through NSIS, `npm run register:start-menu` creates `%APPDATA%\Microsoft\Windows\Start Menu\Programs\ConnLens.lnk` pointing at `src-tauri\target\release\connlens.exe`. This makes ConnLens appear under Windows Search Apps instead of only finding the project folder.
 

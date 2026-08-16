@@ -22,7 +22,7 @@ jobs:
             rustTargets: aarch64-apple-darwin
             args: --target aarch64-apple-darwin --bundles app,dmg
           - name: macOS Intel
-            platform: macos-13
+            platform: macos-15-intel
             rustTargets: x86_64-apple-darwin
             args: --target x86_64-apple-darwin --bundles app,dmg
           - name: Linux x64
