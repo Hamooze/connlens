@@ -14,13 +14,6 @@ format = "json"
 strategy = "azure_profile"
 source_type = "config_file"
 
-[[locations]]
-path = "%USERPROFILE%/.azure/config"
-format = "ini"
-strategy = "profile_file"
-source_type = "config_file"
-confidence = "candidate"
-
 [[env_vars]]
 name = "AZURE_CLIENT_ID"
 label = "Azure client"

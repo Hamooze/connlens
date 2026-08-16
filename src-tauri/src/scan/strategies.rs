@@ -1348,7 +1348,7 @@ pub mod envvars {
 
     #[cfg(not(windows))]
     fn read_env_hives() -> BTreeMap<String, String> {
-        BTreeMap::new()
+        std::env::vars().collect()
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::descriptors;
-use crate::models::{ConnectionStatus, SnapshotConnection};
+use crate::models::{ConnectionStatus, ErrorPayload, SnapshotConnection};
 use crate::registry;
 use crate::scan;
 use clap::{Parser, Subcommand};
@@ -26,6 +26,8 @@ enum Commands {
         provider: Option<String>,
         #[arg(long)]
         all: bool,
+        #[arg(long)]
+        rescan: bool,
     },
     Status,
     Providers {
@@ -71,8 +73,13 @@ fn execute(cli: Cli) -> Result<(), (i32, String)> {
             json,
             provider,
             all,
+            rescan,
         } => {
-            let mut snapshot = registry::load_snapshot().map_err(|err| (2, err.to_string()))?;
+            let mut snapshot = if rescan {
+                scan::scan_and_persist(provider.clone()).map_err(|err| (2, format_error(err)))?
+            } else {
+                registry::load_snapshot().map_err(|err| (2, err.to_string()))?
+            };
             snapshot.connections.retain(|connection| {
                 let provider_match = provider
                     .as_deref()
@@ -132,6 +139,13 @@ fn execute(cli: Cli) -> Result<(), (i32, String)> {
         }
     }
     Ok(())
+}
+
+fn format_error(err: ErrorPayload) -> String {
+    match err.detail {
+        Some(detail) => format!("{}: {detail}", err.message),
+        None => err.message,
+    }
 }
 
 fn print_table(connections: &[SnapshotConnection]) {

@@ -151,13 +151,15 @@ fn is_superseded_raw_identity(
 fn is_superseded_generic_identity(
     connection: &Connection,
     seen_friendly_source_paths: &BTreeSet<(String, String)>,
+    seen_friendly_providers: &BTreeSet<String>,
 ) -> bool {
     let Some(path) = connection.source.path.as_ref() else {
         return false;
     };
 
     is_generic_identity_label(&connection.provider, &connection.identity.label)
-        && seen_friendly_source_paths.contains(&(connection.provider.clone(), path.clone()))
+        && (seen_friendly_source_paths.contains(&(connection.provider.clone(), path.clone()))
+            || seen_friendly_providers.contains(&connection.provider))
 }
 
 fn is_friendly_identity_label(provider: &str, label: &str) -> bool {
@@ -168,7 +170,10 @@ fn is_generic_identity_label(provider: &str, label: &str) -> bool {
     let label = label.trim();
     matches!(
         (provider, label),
-        ("neon", "Neon account") | ("vercel", "Vercel account")
+        ("azure", "AzureCloud")
+            | ("azure", "default")
+            | ("neon", "Neon account")
+            | ("vercel", "Vercel account")
     )
 }
 
@@ -312,6 +317,7 @@ impl Registry {
         let mut seen_ids = BTreeSet::new();
         let mut seen_source_paths = BTreeSet::new();
         let mut seen_friendly_source_paths = BTreeSet::new();
+        let mut seen_friendly_providers = BTreeSet::new();
         let old_by_id = self
             .file
             .connections
@@ -333,6 +339,7 @@ impl Registry {
                 seen_source_paths.insert(source_key.clone());
                 if is_friendly_identity_label(&detected.provider, &detected.identity.label) {
                     seen_friendly_source_paths.insert(source_key);
+                    seen_friendly_providers.insert(detected.provider.clone());
                 }
             }
 
@@ -391,7 +398,11 @@ impl Registry {
                 if is_ephemeral_project_link(existing)
                     || is_superseded_fingerprint_fallback(existing, &seen_source_paths)
                     || is_superseded_raw_identity(existing, &seen_source_paths)
-                    || is_superseded_generic_identity(existing, &seen_friendly_source_paths)
+                    || is_superseded_generic_identity(
+                        existing,
+                        &seen_friendly_source_paths,
+                        &seen_friendly_providers,
+                    )
                 {
                     continue;
                 }
@@ -821,6 +832,45 @@ mod tests {
         assert_eq!(
             registry.file.connections[0].identity.label,
             "neon.profile@example.test"
+        );
+    }
+
+    #[test]
+    fn azure_generic_config_rows_are_pruned_when_profile_account_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let config_source = "C:/Users/dev/.azure/config";
+        let profile_source = "C:/Users/dev/.azure/azureProfile.json";
+        let mut cloud = detected(
+            "AzureCloud",
+            "https://portal.azure.com",
+            config_source,
+            None,
+        );
+        cloud.provider = "azure".to_string();
+        cloud.provider_name = "Azure".to_string();
+        cloud.identity.scope = Some("cloud".to_string());
+        let mut default = detected("default", "https://portal.azure.com", config_source, None);
+        default.provider = "azure".to_string();
+        default.provider_name = "Azure".to_string();
+        let mut account = detected(
+            "azure.user@example.test",
+            "33235475-cbc2-48bb-b74d-cbbba011a03c",
+            profile_source,
+            Some("sha256:new"),
+        );
+        account.provider = "azure".to_string();
+        account.provider_name = "Azure".to_string();
+        account.identity.scope = Some("Azure subscription 1".to_string());
+
+        registry.diff(vec![cloud, default], Some("azure"));
+        assert_eq!(registry.file.connections.len(), 2);
+
+        registry.diff(vec![account], Some("azure"));
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(
+            registry.file.connections[0].identity.label,
+            "azure.user@example.test"
         );
     }
 

@@ -42,18 +42,19 @@ pub fn parse(path: &Path, format: Format) -> Result<ParsedDoc, ParseError> {
         code: "io_error".to_string(),
         message: err.to_string(),
     })?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
 
     let value = match format {
-        Format::Json => serde_json::from_str(&text).map_err(|err| ParseError {
+        Format::Json => serde_json::from_str(text).map_err(|err| ParseError {
             code: "parse_error".to_string(),
             message: err.to_string(),
         })?,
-        Format::Yaml => serde_yaml::from_str(&text).map_err(|err| ParseError {
+        Format::Yaml => serde_yaml::from_str(text).map_err(|err| ParseError {
             code: "parse_error".to_string(),
             message: err.to_string(),
         })?,
-        Format::Ini => ini_to_value(&text)?,
-        Format::Toml => toml_to_value(&text)?,
+        Format::Ini => ini_to_value(text)?,
+        Format::Toml => toml_to_value(text)?,
     };
 
     Ok(ParsedDoc { value })
@@ -122,5 +123,16 @@ mod tests {
             value: serde_json::json!({"hosts":{"github.com":{"users":{"alice":{"token":"x"},"bob":{"token":"y"}}}}}),
         };
         assert_eq!(doc.select("hosts.*.users.*").len(), 2);
+    }
+
+    #[test]
+    fn json_parser_allows_utf8_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profile.json");
+        fs::write(&path, "\u{feff}{\"subscriptions\":[]}").unwrap();
+
+        let doc = parse(&path, Format::Json).unwrap();
+
+        assert!(doc.value.get("subscriptions").is_some());
     }
 }

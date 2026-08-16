@@ -195,12 +195,59 @@ fn expand_env(pattern: &str) -> Option<String> {
         let after = &rest[start + 1..];
         let end = after.find('%')?;
         let key = &after[..end];
-        let value = std::env::var(key).ok()?;
+        let value = env_value(key)?;
         output.push_str(&value);
         rest = &after[end + 1..];
     }
     output.push_str(rest);
     Some(output.replace('\\', "/"))
+}
+
+fn env_value(key: &str) -> Option<String> {
+    std::env::var(key).ok().or_else(|| fallback_env_value(key))
+}
+
+fn fallback_env_value(key: &str) -> Option<String> {
+    match key {
+        "HOME" => home_dir(),
+        "USERPROFILE" => home_dir(),
+        "XDG_CONFIG_HOME" => home_dir().map(|home| join_display(&home, ".config")),
+        "XDG_DATA_HOME" => home_dir().map(|home| join_display(&home, ".local/share")),
+        "APPDATA" => app_config_dir(),
+        "LOCALAPPDATA" => app_data_dir(),
+        _ => None,
+    }
+}
+
+fn home_dir() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().display().to_string()))
+}
+
+fn app_config_dir() -> Option<String> {
+    if cfg!(target_os = "macos") {
+        return home_dir().map(|home| join_display(&home, "Library/Application Support"));
+    }
+
+    std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .or_else(|| home_dir().map(|home| join_display(&home, ".config")))
+}
+
+fn app_data_dir() -> Option<String> {
+    if cfg!(target_os = "macos") {
+        return home_dir().map(|home| join_display(&home, "Library/Application Support"));
+    }
+
+    std::env::var("XDG_DATA_HOME")
+        .ok()
+        .or_else(|| home_dir().map(|home| join_display(&home, ".local/share")))
+}
+
+fn join_display(base: &str, child: &str) -> String {
+    Path::new(base).join(child).display().to_string()
 }
 
 #[cfg(test)]
@@ -210,6 +257,13 @@ mod tests {
     #[test]
     fn undefined_env_drops_candidate() {
         assert!(expand("%CONNLENS_DOES_NOT_EXIST%/x.json").is_empty());
+    }
+
+    #[test]
+    fn home_fallback_expands_userprofile_style_paths() {
+        if home_dir().is_some() {
+            assert!(!expand("%USERPROFILE%/.config/gh/hosts.yml").is_empty());
+        }
     }
 
     #[test]
