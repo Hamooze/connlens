@@ -27,6 +27,18 @@ format = "json"
 strategy = "neon_auth"
 source_type = "config_file"
 
+[[locations]]
+path = "%XDG_CONFIG_HOME%/neonctl/credentials.json"
+format = "json"
+strategy = "neon_auth"
+source_type = "config_file"
+
+[[locations]]
+path = "%XDG_CONFIG_HOME%/neon/credentials*.json"
+format = "json"
+strategy = "neon_auth"
+source_type = "config_file"
+
 [[env_vars]]
 name = "NEON_API_KEY"
 label = "Neon API key"

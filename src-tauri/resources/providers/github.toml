@@ -21,6 +21,12 @@ format = "yaml"
 strategy = "gh_hosts"
 source_type = "config_file"
 
+[[locations]]
+path = "%XDG_CONFIG_HOME%/gh/hosts.yml"
+format = "yaml"
+strategy = "gh_hosts"
+source_type = "config_file"
+
 [[env_vars]]
 name = "GITHUB_TOKEN"
 label = "GitHub token"

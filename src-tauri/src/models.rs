@@ -169,7 +169,8 @@ pub struct Settings {
     pub poll_minutes: u16,
     #[serde(default = "default_true")]
     pub toasts_enabled: bool,
-    #[serde(default = "default_true")]
+    // Retained for older registries; connection discovery is always local.
+    #[serde(default)]
     pub probes_enabled: bool,
     #[serde(default)]
     pub provider_toggles: BTreeMap<String, bool>,
@@ -193,7 +194,7 @@ impl Default for Settings {
             watchers_enabled: true,
             poll_minutes: 10,
             toasts_enabled: true,
-            probes_enabled: true,
+            probes_enabled: false,
             provider_toggles: BTreeMap::new(),
             project_roots: Vec::new(),
             theme: default_theme(),
@@ -223,6 +224,8 @@ pub struct RegistryFile {
     pub schema_version: u8,
     pub last_scan: Option<String>,
     #[serde(default)]
+    pub provider_errors: Vec<ProviderError>,
+    #[serde(default)]
     pub connections: Vec<Connection>,
     #[serde(default)]
     pub settings: Settings,
@@ -233,6 +236,7 @@ impl Default for RegistryFile {
         Self {
             schema_version: 1,
             last_scan: None,
+            provider_errors: Vec::new(),
             connections: Vec::new(),
             settings: Settings::default(),
         }

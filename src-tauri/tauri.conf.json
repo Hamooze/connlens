@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "popover",
@@ -19,6 +20,8 @@
         "visible": false,
         "resizable": false,
         "decorations": false,
+        "transparent": false,
+        "shadow": true,
         "skipTaskbar": true,
         "alwaysOnTop": true
       }

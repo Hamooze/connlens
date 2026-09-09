@@ -74,12 +74,14 @@ pub struct Registry {
 }
 
 pub fn app_home() -> PathBuf {
-    if let Ok(path) = std::env::var("CONNLENS_HOME") {
+    if let Some(path) = std::env::var_os("CONNLENS_HOME") {
         return PathBuf::from(path);
     }
 
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        return PathBuf::from(local).join("ConnLens");
+    if cfg!(windows) {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+            return PathBuf::from(local).join("ConnLens");
+        }
     }
 
     directories::ProjectDirs::from("com", "brdg", "ConnLens")
@@ -108,7 +110,14 @@ pub fn short_hash(parts: &[&str]) -> String {
 pub fn connection_id(detected: &DetectedConnection) -> String {
     let host = detected.identity.host.as_deref().unwrap_or_default();
     let source = detected.source.path.as_deref().unwrap_or_default();
-    short_hash(&[&detected.provider, &detected.identity.label, host, source])
+    let scope = detected.identity.scope.as_deref().unwrap_or_default();
+    short_hash(&[
+        &detected.provider,
+        &detected.identity.label,
+        host,
+        source,
+        scope,
+    ])
 }
 
 fn registry_path(home: &Path) -> PathBuf {
@@ -234,13 +243,17 @@ fn lock(home: &Path) -> Result<RegistryLock, RegistryError> {
 
 fn read_file(path: &Path) -> Result<RegistryFile, RegistryError> {
     let text = fs::read_to_string(path)?;
-    serde_json::from_str(&text).map_err(|err| RegistryError::Parse(err.to_string()))
+    let mut file: RegistryFile =
+        serde_json::from_str(&text).map_err(|err| RegistryError::Parse(err.to_string()))?;
+    file.settings.probes_enabled = false;
+    Ok(file)
 }
 
 fn archive_corrupt(path: &Path) {
     if path.exists() {
-        let stamp = Utc::now().format("%Y%m%d%H%M%S");
-        let archive = path.with_file_name(format!("registry.corrupt-{stamp}.json"));
+        let stamp = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let archive = path.with_file_name(format!("{name}.corrupt-{stamp}"));
         let _ = fs::rename(path, archive);
     }
 }
@@ -279,8 +292,23 @@ impl Registry {
                         });
                     }
                 },
+                Err(RegistryError::Parse(_)) => {
+                    archive_corrupt(&primary);
+                    return Ok(Self {
+                        home: home.to_path_buf(),
+                        file: RegistryFile::default(),
+                        history_reset_notice: true,
+                    });
+                }
                 Err(err) => return Err(err),
             }
+        }
+        if backup.exists() {
+            return Ok(Self {
+                home: home.to_path_buf(),
+                file: read_file(&backup)?,
+                history_reset_notice: true,
+            });
         }
 
         Ok(Self {
@@ -292,6 +320,10 @@ impl Registry {
 
     pub fn save(&self) -> Result<(), RegistryError> {
         let _guard = lock(&self.home)?;
+        self.save_unlocked()
+    }
+
+    fn save_unlocked(&self) -> Result<(), RegistryError> {
         fs::create_dir_all(&self.home)?;
         let path = registry_path(&self.home);
         let backup = backup_path(&self.home);
@@ -303,15 +335,24 @@ impl Registry {
 
         let text = serde_json::to_string_pretty(&self.file)
             .map_err(|err| RegistryError::Parse(err.to_string()))?;
-        fs::write(&temp, text)?;
-        if path.exists() {
-            fs::remove_file(&path)?;
-        }
+        let mut file = fs::File::create(&temp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
         fs::rename(temp, path)?;
         Ok(())
     }
 
     pub fn diff(&mut self, detected: Vec<DetectedConnection>, scope: Option<&str>) -> ChangeSet {
+        self.diff_with_unavailable(detected, scope, &BTreeSet::new())
+    }
+
+    pub fn diff_with_unavailable(
+        &mut self,
+        detected: Vec<DetectedConnection>,
+        scope: Option<&str>,
+        unavailable: &BTreeSet<String>,
+    ) -> ChangeSet {
         let now = now_iso();
         let mut changes = ChangeSet::default();
         let mut seen_ids = BTreeSet::new();
@@ -333,7 +374,9 @@ impl Registry {
             }
 
             let id = connection_id(&detected);
-            seen_ids.insert(id.clone());
+            if !seen_ids.insert(id.clone()) {
+                continue;
+            }
             if let Some(path) = detected.source.path.as_deref() {
                 let source_key = (detected.provider.clone(), path.to_string());
                 seen_source_paths.insert(source_key.clone());
@@ -343,8 +386,20 @@ impl Registry {
                 }
             }
 
-            if let Some(existing) = old_by_id.get(&id) {
+            // Preserve history when migrating IDs to include the profile scope.
+            let existing = old_by_id.get(&id).or_else(|| {
+                self.file.connections.iter().find(|existing| {
+                    existing.provider == detected.provider
+                        && existing.identity.label == detected.identity.label
+                        && existing.identity.host == detected.identity.host
+                        && existing.identity.scope == detected.identity.scope
+                        && existing.source == detected.source
+                })
+            });
+            if let Some(existing) = existing {
+                seen_ids.insert(existing.id.clone());
                 let mut updated = existing.clone();
+                updated.id = id.clone();
                 let fingerprint_changed = existing.fingerprint != detected.fingerprint
                     && existing.fingerprint.is_some()
                     && detected.fingerprint.is_some();
@@ -361,6 +416,8 @@ impl Registry {
                 updated.status = if fingerprint_changed {
                     updated.seen = false;
                     changes.changed.push(id.clone());
+                    ConnectionStatus::Changed
+                } else if existing.status == ConnectionStatus::Changed && !existing.seen {
                     ConnectionStatus::Changed
                 } else {
                     ConnectionStatus::Active
@@ -393,7 +450,19 @@ impl Registry {
 
             let in_scope = scope
                 .map(|provider| existing.provider == provider)
-                .unwrap_or(true);
+                .unwrap_or(true)
+                && self
+                    .file
+                    .settings
+                    .provider_toggles
+                    .get(&existing.provider)
+                    .copied()
+                    != Some(false)
+                && !unavailable.contains(&existing.provider)
+                && !matches!(
+                    existing.source.source_type,
+                    SourceType::Cli | SourceType::AgentRegistered
+                );
             if !seen_ids.contains(&existing.id) && in_scope {
                 if is_ephemeral_project_link(existing)
                     || is_superseded_fingerprint_fallback(existing, &seen_source_paths)
@@ -410,8 +479,10 @@ impl Registry {
                 if missing.status != ConnectionStatus::Missing {
                     changes.missing.push(missing.id.clone());
                 }
+                if missing.status != ConnectionStatus::Missing {
+                    missing.seen = false;
+                }
                 missing.status = ConnectionStatus::Missing;
-                missing.seen = false;
                 next.push(missing);
             } else if !seen_ids.contains(&existing.id) {
                 next.push(existing.clone());
@@ -456,7 +527,11 @@ impl Registry {
             connections,
             settings: self.file.settings.clone(),
             last_scan: self.file.last_scan.clone(),
-            provider_errors,
+            provider_errors: if provider_errors.is_empty() {
+                self.file.provider_errors.clone()
+            } else {
+                provider_errors
+            },
             watcher_health,
             history_reset_notice: self.history_reset_notice
                 && !self.file.settings.history_reset_notice_dismissed,
@@ -526,6 +601,8 @@ impl Registry {
             .find(|connection| connection.id == id)
         {
             existing.last_seen = now;
+            existing.identity = detected.identity;
+            existing.meta = detected.meta;
             existing.status = ConnectionStatus::Unverified;
             existing.seen = false;
             return Ok(id);
@@ -589,26 +666,35 @@ pub fn validate_register_entry(entry: &RegisterEntry) -> Result<(), RegistryErro
     Ok(())
 }
 
-pub fn with_registry<T>(mut f: impl FnMut(&mut Registry) -> T) -> Result<T, RegistryError> {
-    let home = app_home();
-    let mut registry = Registry::load(&home)?;
+pub fn with_registry<T>(f: impl FnOnce(&mut Registry) -> T) -> Result<T, RegistryError> {
+    with_registry_at(&app_home(), f)
+}
+
+pub fn with_registry_at<T>(
+    home: &Path,
+    f: impl FnOnce(&mut Registry) -> T,
+) -> Result<T, RegistryError> {
+    // Hold one lock across the complete transaction, including scan and UI updates.
+    let _guard = lock(home)?;
+    let mut registry = Registry::load(home)?;
+    let previous = registry.file.clone();
     let result = f(&mut registry);
-    registry.save()?;
+    if registry.file != previous || !registry_path(home).exists() {
+        registry.save_unlocked()?;
+    }
     Ok(result)
 }
 
 pub fn load_snapshot() -> Result<Snapshot, RegistryError> {
     let home = app_home();
     let registry = Registry::load(&home)?;
-    let health = if registry.file.settings.watchers_enabled {
-        WatcherHealth::Ok
-    } else {
-        WatcherHealth::Paused
-    };
+    let health = crate::watchers::health(registry.file.settings.watchers_enabled);
     Ok(registry.snapshot(Vec::new(), health))
 }
 
-pub fn update_settings(patch: Settings) -> Result<Settings, RegistryError> {
+pub fn update_settings(mut patch: Settings) -> Result<Settings, RegistryError> {
+    patch.probes_enabled = false;
+    patch.poll_minutes = patch.poll_minutes.clamp(1, 1440);
     with_registry(|registry| {
         registry.file.settings = patch.clone();
         registry.file.settings.clone()
@@ -616,23 +702,36 @@ pub fn update_settings(patch: Settings) -> Result<Settings, RegistryError> {
 }
 
 pub fn set_autostart_setting(enabled: bool) -> Result<(), RegistryError> {
-    let home = app_home();
-    let mut registry = Registry::load(&home)?;
-    if registry.file.settings.autostart == enabled {
-        return Ok(());
-    }
-    registry.file.settings.autostart = enabled;
-    registry.save()
+    with_registry(|registry| registry.file.settings.autostart = enabled)
 }
 
 pub fn reset_app_data() -> Result<(), RegistryError> {
-    let home = app_home();
-    if home.exists() {
-        let _guard = lock(&home)?;
-        let _ = fs::remove_file(registry_path(&home));
-        let _ = fs::remove_file(backup_path(&home));
-        let _ = fs::remove_dir_all(home.join("inbox"));
-        let _ = fs::remove_dir_all(home.join("providers"));
+    reset_app_data_at(&app_home())
+}
+
+fn reset_app_data_at(home: &Path) -> Result<(), RegistryError> {
+    if !home.exists() {
+        return Ok(());
+    }
+    let _guard = lock(home)?;
+    // Return filesystem failures to the UI instead of reporting a partial reset as success.
+    for directory in [home.join("inbox"), home.join("providers")] {
+        if let Err(error) = fs::remove_dir_all(directory) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.into());
+            }
+        }
+    }
+    for path in [
+        backup_path(home),
+        home.join("registry.json.tmp"),
+        registry_path(home),
+    ] {
+        if let Err(error) = fs::remove_file(path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.into());
+            }
+        }
     }
     Ok(())
 }
@@ -641,6 +740,123 @@ pub fn reset_app_data() -> Result<(), RegistryError> {
 mod tests {
     use super::*;
     use crate::models::{ConnectionSource, SourceType};
+
+    #[test]
+    fn reset_removes_owned_data_and_reports_filesystem_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        with_registry_at(home, |registry| {
+            registry.file.settings.theme = "light".into()
+        })
+        .unwrap();
+        with_registry_at(home, |registry| {
+            registry.file.settings.theme = "dark".into()
+        })
+        .unwrap();
+        fs::write(
+            home.join("providers"),
+            "a file cannot be removed as a provider directory",
+        )
+        .unwrap();
+        assert!(reset_app_data_at(home).is_err());
+        assert!(registry_path(home).exists());
+        assert!(!lock_path(home).exists());
+        fs::remove_file(home.join("providers")).unwrap();
+        fs::create_dir(home.join("providers")).unwrap();
+        fs::write(home.join("providers/fixture.toml"), "fixture descriptor").unwrap();
+        reset_app_data_at(home).unwrap();
+        assert!(!registry_path(home).exists());
+        assert!(!backup_path(home).exists());
+        assert!(!home.join("providers").exists());
+        assert!(!lock_path(home).exists());
+        assert!(Registry::load(home).unwrap().file.connections.is_empty());
+    }
+
+    #[test]
+    fn parallel_transactions_preserve_both_settings_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::thread::scope(|scope| {
+            for provider in ["github", "aws"] {
+                let home = dir.path();
+                scope.spawn(move || {
+                    with_registry_at(home, |registry| {
+                        std::thread::sleep(Duration::from_millis(10));
+                        registry
+                            .file
+                            .settings
+                            .provider_toggles
+                            .insert(provider.to_string(), false);
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        let registry = Registry::load(dir.path()).unwrap();
+        assert_eq!(registry.file.settings.provider_toggles.len(), 2);
+    }
+
+    #[test]
+    fn profiles_with_same_account_and_path_keep_distinct_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let mut first = detected("same-account", "account-host", "config", None);
+        first.identity.scope = Some("development".to_string());
+        let mut second = first.clone();
+        second.identity.scope = Some("production".to_string());
+        registry.diff(vec![first.clone(), first, second], None);
+        assert_eq!(registry.file.connections.len(), 2);
+        assert_ne!(
+            registry.file.connections[0].id,
+            registry.file.connections[1].id
+        );
+    }
+
+    #[test]
+    fn manually_registered_connections_survive_scans_and_update_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let entry = RegisterEntry {
+            provider: "fixture".into(),
+            label: "Manual account".into(),
+            host: None,
+            scope: None,
+            note: Some("First note".into()),
+            meta: BTreeMap::new(),
+        };
+        let id = registry.register_entry(entry.clone()).unwrap();
+        registry.diff(Vec::new(), None);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Unverified
+        );
+        let mut updated = entry;
+        updated.note = Some("Updated note".into());
+        assert_eq!(registry.register_entry(updated).unwrap(), id);
+        assert_eq!(
+            registry.file.connections[0]
+                .meta
+                .get("note")
+                .and_then(Value::as_str),
+            Some("Updated note")
+        );
+    }
+
+    #[test]
+    fn missing_primary_recovers_backup_and_legacy_probes_stay_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = RegistryFile::default();
+        file.settings.probes_enabled = true;
+        file.settings.theme = "light".into();
+        fs::write(
+            backup_path(dir.path()),
+            serde_json::to_string(&file).unwrap(),
+        )
+        .unwrap();
+        let recovered = Registry::load(dir.path()).unwrap();
+        assert!(recovered.history_reset_notice);
+        assert_eq!(recovered.file.settings.theme, "light");
+        assert!(!recovered.file.settings.probes_enabled);
+    }
 
     fn detected(
         label: &str,

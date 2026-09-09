@@ -20,6 +20,12 @@ format = "yaml"
 strategy = "glab_config"
 source_type = "config_file"
 
+[[locations]]
+path = "%XDG_CONFIG_HOME%/glab-cli/config.yml"
+format = "yaml"
+strategy = "glab_config"
+source_type = "config_file"
+
 [[env_vars]]
 name = "GITLAB_TOKEN"
 label = "GitLab token"

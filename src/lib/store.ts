@@ -25,13 +25,16 @@ interface ConnLensStore {
   openDashboard: (id: string) => Promise<void>;
   revealSource: (id: string) => Promise<void>;
   removeConnection: (id: string) => Promise<void>;
-  addCustomProvider: (input: CustomProviderInput) => Promise<void>;
+  addCustomProvider: (input: CustomProviderInput) => Promise<boolean>;
   updateSettings: (patch: Partial<SettingsState>) => Promise<void>;
   toggleProviderCollapsed: (provider: string) => void;
   purgeMissing: () => Promise<void>;
   resetAppData: () => Promise<void>;
   dismissHistoryNotice: () => Promise<void>;
 }
+
+let settingsQueue = Promise.resolve();
+let loadRequest = 0;
 
 export const useConnLensStore = create<ConnLensStore>((set, get) => ({
   snapshot: null,
@@ -48,11 +51,18 @@ export const useConnLensStore = create<ConnLensStore>((set, get) => ({
   setToast: (toast) => set({ toast }),
 
   load: async () => {
+    const request = ++loadRequest;
+    const before = get().snapshot;
     set({ loading: true });
     try {
-      set({ snapshot: await api.getState(), loading: false });
+      const snapshot = await api.getState();
+      if (request === loadRequest && get().snapshot === before) {
+        set({ snapshot, loading: false, toast: null });
+      }
     } catch (error) {
-      set({ loading: false, toast: messageFor(error) });
+      if (request === loadRequest && get().snapshot === before) {
+        set({ loading: false, toast: messageFor(error) });
+      }
     }
   },
 
@@ -103,38 +113,47 @@ export const useConnLensStore = create<ConnLensStore>((set, get) => ({
   addCustomProvider: async (input) => {
     try {
       set({ snapshot: await api.addCustomProvider(input), toast: "Custom provider added" });
+      return true;
     } catch (error) {
       set({ toast: messageFor(error) });
+      return false;
     }
   },
 
   updateSettings: async (patch) => {
-    const snapshot = get().snapshot;
-    if (!snapshot) return;
-    const settings = { ...snapshot.settings, ...patch };
-    try {
-      set({ snapshot: await api.updateSettings(settings), toast: "Save" });
-    } catch (error) {
-      set({ toast: messageFor(error) });
-    }
+    // Read the latest settings inside the queue so rapid toggles cannot overwrite each other.
+    settingsQueue = settingsQueue.then(async () => {
+      const snapshot = get().snapshot;
+      if (!snapshot) return;
+      try {
+        set({ snapshot: await api.updateSettings({ ...snapshot.settings, ...patch }), toast: "Saved" });
+      } catch (error) {
+        set({ toast: messageFor(error) });
+      }
+    });
+    await settingsQueue;
   },
 
   toggleProviderCollapsed: (provider) => {
-    const snapshot = get().snapshot;
-    if (!snapshot) return;
-    const collapsedProviders = {
-      ...snapshot.settings.collapsedProviders,
-      [provider]: !snapshot.settings.collapsedProviders[provider],
-    };
-    const settings = { ...snapshot.settings, collapsedProviders };
-    set({ snapshot: { ...snapshot, settings } });
-    void api.updateSettings(settings).catch(() => undefined);
+    settingsQueue = settingsQueue.then(async () => {
+      const snapshot = get().snapshot;
+      if (!snapshot) return;
+      const collapsedProviders = { ...snapshot.settings.collapsedProviders,
+        [provider]: !snapshot.settings.collapsedProviders[provider] };
+      try {
+        set({ snapshot: await api.updateSettings({ ...snapshot.settings, collapsedProviders }) });
+      } catch (error) {
+        set({ toast: messageFor(error) });
+      }
+    });
   },
 
   purgeMissing: async () => {
     try {
       const removed = await api.purgeMissing();
-      await get().load();
+      const before = get().snapshot;
+      const snapshot = await api.getState();
+      if (get().snapshot === before) set({ snapshot });
       set({ toast: `${removed} missing row${removed === 1 ? "" : "s"} purged` });
     } catch (error) {
       set({ toast: messageFor(error) });
@@ -142,11 +161,16 @@ export const useConnLensStore = create<ConnLensStore>((set, get) => ({
   },
 
   resetAppData: async () => {
-    try {
-      set({ snapshot: await api.resetAppData(), expandedId: null, toast: "App data reset" });
-    } catch (error) {
-      set({ toast: messageFor(error) });
-    }
+    // A reset is ordered after pending settings writes so an earlier save cannot restore them.
+    settingsQueue = settingsQueue.then(async () => {
+      ++loadRequest;
+      try {
+        set({ snapshot: await api.resetAppData(), expandedId: null, loading: false, toast: "App data reset" });
+      } catch (error) {
+        set({ toast: messageFor(error) });
+      }
+    });
+    await settingsQueue;
   },
 
   dismissHistoryNotice: async () => {
