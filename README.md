@@ -1,6 +1,6 @@
 # ConnLens
 
-ConnLens is a local-only Tauri 2 utility for inspecting developer app connections found in local configuration. It uses a compact tray/menu-bar panel with provider filters, searchable accounts, expandable redacted details, Settings, and Quit. On macOS the panel has a top pointer, monochrome icons, a blue selected tab, dark inset cards, and a two-button footer. Closing the panel hides it; Quit exits the application.
+ConnLens is a local-only Tauri 2 utility for inspecting developer app connections found in local configuration. It uses a compact tray/menu-bar panel with provider filters, searchable accounts, expandable redacted details, Settings, and Quit. On macOS the panel has a top pointer, monochrome icons, a blue selected tab, dark inset cards, and a two-button footer. Closing the panel hides it; Quit exits the application. On macOS, the bundle declares its menu-bar agent role at launch so window-management utilities can recognize it as a background app. Reopening ConnLens from Applications or Spotlight restores the existing panel.
 
 The application does not make provider API requests, collect telemetry, authenticate to external services, or sync data. Explicit “Open dashboard” and website links open the system browser. Available status means a local reference exists; it does not prove that a credential is accepted by a provider.
 

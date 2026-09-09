@@ -355,8 +355,15 @@ pub fn run() {
             commands::reveal_source,
             commands::update_settings
         ])
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|_app, event| match event {
+            // Finder and `open` send a native reopen event to an already-running
+            // macOS app instead of launching a second process for the singleton.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => show_popover(_app, None),
+            _ => {}
+        });
 }
 
 fn fixture_identifier(identifier: &str, home: &std::path::Path) -> String {

@@ -25,7 +25,10 @@ function binaryHeader(path, expected) {
 if (process.platform === "darwin") {
   for (const app of artifact("macos", ".app")) {
     command("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
-    command("/usr/bin/plutil", ["-lint", join(app, "Contents/Info.plist")]);
+    const plistPath = join(app, "Contents/Info.plist");
+    command("/usr/bin/plutil", ["-lint", plistPath]);
+    const plist = JSON.parse(command("/usr/bin/plutil", ["-convert", "json", "-o", "-", plistPath]));
+    assert.equal(plist.LSUIElement, true, "macOS bundle must declare its menu-bar agent role at launch (LSUIElement)");
     const expected = process.argv[3] ?? (process.arch === "arm64" ? "arm64" : "x86_64");
     assert(command("/usr/bin/lipo", ["-archs", join(app, "Contents/MacOS/connlens")]).trim().split(/\s+/).includes(expected), "Wrong macOS binary architecture");
   }
