@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { ConnLensSnapshot, CustomProviderInput, SettingsState } from "./types";
+import type { CleanupRequest, CleanupResult, CleanupReview, ConnLensSnapshot, CustomProviderInput, SettingsState } from "./types";
 
 type Listener = (snapshot: ConnLensSnapshot) => void;
 
@@ -23,6 +23,15 @@ export const previewPlatform = (): string => {
 };
 
 export const api = {
+  async reviewCleanup(): Promise<CleanupReview> {
+    if (isNativeApp()) return invoke<CleanupReview>("review_cleanup");
+    return (await preview()).reviewCleanup();
+  },
+
+  async executeCleanup(request: CleanupRequest): Promise<CleanupResult> {
+    if (isNativeApp()) return invoke<CleanupResult>("execute_cleanup", { request });
+    return (await preview()).executeCleanup(request);
+  },
   async getPlatform(): Promise<string> {
     if (isNativeApp()) return invoke<string>("get_platform").catch(() => previewPlatform());
     return previewPlatform();

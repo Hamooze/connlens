@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { api, ApiError } from "./api";
 import type {
   ConnLensSnapshot,
+  CleanupReview,
+  CleanupResult,
   CustomProviderInput,
   SettingsState,
   ViewName,
@@ -14,6 +16,14 @@ interface ConnLensStore {
   expandedId: string | null;
   view: ViewName;
   toast: string | null;
+  cleanupReview: CleanupReview | null;
+  cleanupResult: CleanupResult | null;
+  cleanupTargetId: string | null;
+  cleanupLoading: boolean;
+  cleanupExecuting: boolean;
+  cleanupError: string | null;
+  reviewCleanup: (targetId?: string) => Promise<void>;
+  executeCleanup: (connectionIds: string[], fileIds: string[]) => Promise<void>;
   setSnapshot: (snapshot: ConnLensSnapshot) => void;
   setQuery: (query: string) => void;
   setExpandedId: (id: string | null) => void;
@@ -35,6 +45,7 @@ interface ConnLensStore {
 
 let settingsQueue = Promise.resolve();
 let loadRequest = 0;
+let cleanupRequest = 0;
 
 export const useConnLensStore = create<ConnLensStore>((set, get) => ({
   snapshot: null,
@@ -43,11 +54,54 @@ export const useConnLensStore = create<ConnLensStore>((set, get) => ({
   expandedId: null,
   view: "list",
   toast: null,
+  cleanupReview: null,
+  cleanupResult: null,
+  cleanupTargetId: null,
+  cleanupLoading: false,
+  cleanupExecuting: false,
+  cleanupError: null,
 
-  setSnapshot: (snapshot) => set({ snapshot, loading: false }),
+  reviewCleanup: async (targetId) => {
+    if (get().cleanupLoading || get().cleanupExecuting) return;
+    const request = ++cleanupRequest;
+    set({ view: "cleanup", cleanupLoading: true, cleanupReview: null, cleanupResult: null,
+      cleanupError: null, cleanupTargetId: targetId ?? null, toast: null });
+    try {
+      const review = await api.reviewCleanup();
+      if (request !== cleanupRequest) return;
+      set({ cleanupReview: review, snapshot: freshestSnapshot(get().snapshot, review.snapshot), cleanupLoading: false });
+    } catch (error) {
+      if (request === cleanupRequest) set({ cleanupLoading: false, cleanupError: messageFor(error) });
+    }
+  },
+
+  executeCleanup: async (connectionIds, fileIds) => {
+    const { cleanupReview, cleanupLoading, cleanupExecuting } = get();
+    if (!cleanupReview || cleanupLoading || cleanupExecuting || !connectionIds.length) return;
+    set({ cleanupExecuting: true, cleanupError: null, toast: null });
+    try {
+      const result = await api.executeCleanup({ reviewId: cleanupReview.reviewId, connectionIds, fileIds });
+      set({ cleanupResult: { ...result,
+        retained: result.retained.map((entry) => ({ ...entry, label: cleanupReview.entries.find((row) => row.id === entry.id)?.label })),
+        fileFailures: result.fileFailures.map((file) => ({ ...file, path: cleanupReview.files.find((row) => row.id === file.id)?.path })),
+      }, snapshot: freshestSnapshot(get().snapshot, result.snapshot), cleanupReview: null,
+        cleanupExecuting: false, expandedId: null });
+    } catch (error) {
+      // A native review can be consumed even when execution fails. Require a
+      // fresh review rather than replaying a possibly partly completed request.
+      set({ cleanupReview: null, cleanupExecuting: false, cleanupError: messageFor(error) });
+    }
+  },
+
+  setSnapshot: (snapshot) => set({ snapshot: freshestSnapshot(get().snapshot, snapshot), loading: false }),
   setQuery: (query) => set({ query }),
   setExpandedId: (expandedId) => set({ expandedId }),
-  setView: (view) => set({ view }),
+  setView: (view) => {
+    if (get().cleanupExecuting) return;
+    if (view !== "cleanup") ++cleanupRequest;
+    set({ view, ...(view !== "cleanup"
+      ? { cleanupReview: null, cleanupResult: null, cleanupError: null, cleanupTargetId: null, cleanupLoading: false } : {}) });
+  },
   setToast: (toast) => set({ toast }),
 
   load: async () => {
@@ -69,7 +123,8 @@ export const useConnLensStore = create<ConnLensStore>((set, get) => ({
   rescan: async (provider) => {
     set({ loading: true });
     try {
-      set({ snapshot: await api.rescan(provider), loading: false, toast: null });
+      const snapshot = await api.rescan(provider);
+      set({ snapshot: freshestSnapshot(get().snapshot, snapshot), loading: false, toast: null });
     } catch (error) {
       set({ loading: false, toast: messageFor(error) });
     }
@@ -161,6 +216,8 @@ export const useConnLensStore = create<ConnLensStore>((set, get) => ({
   },
 
   resetAppData: async () => {
+    ++cleanupRequest;
+    set({ cleanupReview: null, cleanupResult: null, cleanupError: null, cleanupTargetId: null, cleanupLoading: false });
     // A reset is ordered after pending settings writes so an earlier save cannot restore them.
     settingsQueue = settingsQueue.then(async () => {
       ++loadRequest;
@@ -188,4 +245,12 @@ function messageFor(error: unknown) {
     return String((error as { message: unknown }).message);
   }
   return "Something went wrong";
+}
+
+// Scan timestamps come from the serialized native registry transaction. A later
+// watcher snapshot must survive a delayed response from an earlier transaction.
+function freshestSnapshot(current: ConnLensSnapshot | null, incoming: ConnLensSnapshot) {
+  const currentTime = Date.parse(current?.lastScan ?? "");
+  const incomingTime = Date.parse(incoming.lastScan ?? "");
+  return current && Number.isFinite(currentTime) && Number.isFinite(incomingTime) && currentTime > incomingTime ? current : incoming;
 }

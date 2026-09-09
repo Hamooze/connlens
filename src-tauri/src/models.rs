@@ -21,6 +21,78 @@ pub enum ConnectionStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum Availability {
+    Available,
+    Missing,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Usage {
+    Selected,
+    Referenced,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionValidation {
+    pub availability: Availability,
+    pub usage: Usage,
+    pub checked_at: Option<String>,
+    pub reason: String,
+    pub reason_code: String,
+}
+
+impl Default for ConnectionValidation {
+    fn default() -> Self {
+        Self::unknown(
+            "not_validated",
+            "This entry has not been validated locally yet.",
+            None,
+        )
+    }
+}
+
+impl ConnectionValidation {
+    pub fn unknown(
+        code: impl Into<String>,
+        reason: impl Into<String>,
+        checked_at: Option<String>,
+    ) -> Self {
+        Self {
+            availability: Availability::Unknown,
+            usage: Usage::Unknown,
+            checked_at,
+            reason: reason.into(),
+            reason_code: code.into(),
+        }
+    }
+
+    pub fn available(checked_at: &str, selected: bool) -> Self {
+        Self {
+            availability: Availability::Available,
+            usage: if selected { Usage::Selected } else { Usage::Referenced },
+            checked_at: Some(checked_at.to_string()),
+            reason: if selected { "This identity is selected in its local configuration." } else { "A local reference to this entry is present. Actual runtime use and online access are not checked." }.to_string(),
+            reason_code: if selected { "selected_locally" } else { "referenced_locally" }.to_string(),
+        }
+    }
+
+    pub fn missing(checked_at: &str, code: &str, reason: &str) -> Self {
+        Self {
+            availability: Availability::Missing,
+            usage: Usage::Unknown,
+            checked_at: Some(checked_at.to_string()),
+            reason: reason.to_string(),
+            reason_code: code.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceType {
     ConfigFile,
     CredentialManager,
@@ -56,6 +128,8 @@ pub struct Connection {
     pub identity: Identity,
     pub source: ConnectionSource,
     pub status: ConnectionStatus,
+    #[serde(default)]
+    pub validation: ConnectionValidation,
     pub fingerprint: Option<String>,
     pub first_seen: String,
     pub last_seen: String,
@@ -73,7 +147,7 @@ fn default_seen() -> bool {
 
 impl Connection {
     pub fn removable(&self) -> bool {
-        self.status == ConnectionStatus::Missing
+        self.validation.availability == Availability::Missing
             || matches!(
                 self.source.source_type,
                 SourceType::Cli | SourceType::AgentRegistered

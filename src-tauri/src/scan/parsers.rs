@@ -2,6 +2,7 @@ use ini::Ini;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 const MAX_PARSE_BYTES: u64 = 1_048_576;
@@ -26,22 +27,62 @@ pub struct ParseError {
     pub message: String,
 }
 
-pub fn parse(path: &Path, format: Format) -> Result<ParsedDoc, ParseError> {
-    let metadata = fs::metadata(path).map_err(|err| ParseError {
-        code: "io_error".to_string(),
-        message: err.to_string(),
-    })?;
-    if metadata.len() > MAX_PARSE_BYTES {
+pub(crate) fn read_regular_text(path: &Path) -> Result<String, ParseError> {
+    let io_error = |error: std::io::Error| ParseError {
+        code: "io_error".into(),
+        message: error.to_string(),
+    };
+    if !fs::metadata(path).map_err(io_error)?.is_file() {
         return Err(ParseError {
-            code: "file_too_large".to_string(),
-            message: format!("{} is over the 1 MB parser cap", path.display()),
+            code: "not_regular_file".into(),
+            message: "The source is not a regular file".into(),
         });
     }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(io_error)?;
+    let metadata = file.metadata().map_err(io_error)?;
+    if !metadata.is_file() {
+        return Err(ParseError {
+            code: "not_regular_file".into(),
+            message: "The source is not a regular file".into(),
+        });
+    }
+    if metadata.len() > MAX_PARSE_BYTES {
+        return Err(ParseError {
+            code: "file_too_large".into(),
+            message: "The source exceeds the 1 MB parser cap".into(),
+        });
+    }
+    let mut text = String::new();
+    file.take(MAX_PARSE_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(io_error)?;
+    if text.len() as u64 > MAX_PARSE_BYTES {
+        return Err(ParseError {
+            code: "file_too_large".into(),
+            message: "The source exceeds the 1 MB parser cap".into(),
+        });
+    }
+    Ok(text)
+}
 
-    let text = fs::read_to_string(path).map_err(|err| ParseError {
-        code: "io_error".to_string(),
-        message: err.to_string(),
-    })?;
+pub fn parse(path: &Path, format: Format) -> Result<ParsedDoc, ParseError> {
+    parse_text(&read_regular_text(path)?, format)
+}
+
+pub(crate) fn parse_text(text: &str, format: Format) -> Result<ParsedDoc, ParseError> {
+    if text.len() as u64 > MAX_PARSE_BYTES {
+        return Err(ParseError {
+            code: "file_too_large".into(),
+            message: "The source exceeds the 1 MB parser cap".into(),
+        });
+    }
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
 
     let value = match format {
@@ -128,6 +169,35 @@ impl ParsedDoc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_rejects_nonregular_sources_and_oversized_text() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            parse(dir.path(), Format::Json).unwrap_err().code,
+            "not_regular_file"
+        );
+        assert_eq!(
+            parse_text(&" ".repeat(MAX_PARSE_BYTES as usize + 1), Format::Json)
+                .unwrap_err()
+                .code,
+            "file_too_large"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parser_rejects_fifo_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.fifo");
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            parse(&path, Format::Json).unwrap_err().code,
+            "not_regular_file"
+        );
+    }
 
     #[test]
     fn parser_errors_do_not_include_credential_lines() {

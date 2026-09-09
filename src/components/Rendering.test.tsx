@@ -13,6 +13,8 @@ function connection(id: string): Connection {
     status: "active", fingerprint: "sha256:12345678",
     firstSeen: "2026-09-10T10:00:00.000Z", lastSeen: "2026-09-10T10:00:00.000Z",
     hidden: false, seen: true, meta: {}, removable: false,
+    validation: { availability: "available", usage: "selected", checkedAt: "2026-09-10T10:00:00.000Z",
+      reason: "Selected account exists in local config", reasonCode: "fixture" },
   };
 }
 

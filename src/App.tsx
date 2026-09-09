@@ -1,4 +1,4 @@
-import { ChevronLeft, Grid2X2, Link2, MoreHorizontal, Power, RefreshCw, Search, Settings, X } from "lucide-react";
+import { ChevronLeft, Grid2X2, Link2, ListChecks, MoreHorizontal, Power, RefreshCw, Search, Settings, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import logo from "./assets/connlens.svg";
@@ -9,11 +9,12 @@ import { formatScanTime } from "./lib/format";
 import { useConnLensStore } from "./lib/store";
 import { ProviderLogo, popularProviderIds, providerName } from "./components/providers";
 import { ConnectionList } from "./components/ConnectionList";
+import { CleanupView } from "./components/CleanupView";
 import { SettingsView } from "./components/SettingsView";
 
 function App() {
-  const { snapshot, query, loading, view, toast } = useConnLensStore(useShallow((state) => ({
-    snapshot: state.snapshot, query: state.query, loading: state.loading, view: state.view, toast: state.toast,
+  const { snapshot, query, loading, view, toast, cleanupExecuting } = useConnLensStore(useShallow((state) => ({
+    snapshot: state.snapshot, query: state.query, loading: state.loading, view: state.view, toast: state.toast, cleanupExecuting: state.cleanupExecuting,
   })));
   const { setQuery, setView, load, setToast } = useConnLensStore.getState();
   const [platform, setPlatform] = useState(previewPlatform);
@@ -34,7 +35,7 @@ function App() {
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (more) setMore(false);
-        else if (view === "settings") setView("list");
+        else if (view !== "list") setView("list");
         else if (query || provider) { setQuery(""); setProvider(null); }
         else void api.closeWindow().catch(() => setToast("Could not hide the window."));
       }
@@ -64,21 +65,21 @@ function App() {
         <header className="titlebar" onMouseDown={(event) => {
           if (event.button === 0 && !(event.target as HTMLElement).closest("button")) void api.startWindowDrag().catch(() => undefined);
         }}>
-          {view === "settings" ? <button className="title-control back" aria-label="Back to connections" onClick={() => setView("list")}><ChevronLeft size={17} /></button> : null}
+          {view !== "list" ? <button disabled={cleanupExecuting} className="title-control back" aria-label="Back to connections" onClick={() => setView("list")}><ChevronLeft size={17} /></button> : null}
           <div className="brand"><img className="brand-logo" src={logo} alt="ConnLens logo" width={30} height={30} draggable={false} /><h1>ConnLens</h1></div>
           <button className="title-control close" aria-label="Hide ConnLens" title="Hide ConnLens" onClick={() => void api.closeWindow().catch(() => setToast("Could not hide the window."))}><X size={15} /></button>
         </header>
 
-        <nav className="provider-rail" aria-label="Provider filters">
+        {view !== "cleanup" ? <nav className="provider-rail" aria-label="Provider filters">
           <button className={!provider && view === "list" ? "selected" : ""} aria-label="All providers" title="All providers" aria-pressed={!provider && view === "list"} onClick={() => pick(null)}><Grid2X2 size={18} /></button>
           {allIds.slice(0, 5).map((id) => <button key={id} className={provider === id && view === "list" ? "selected" : ""} aria-label={`${providerName(id)} connections`} title={providerName(id)} aria-pressed={provider === id && view === "list"} onClick={() => pick(id)}><ProviderLogo provider={id} /></button>)}
           <button className={more || (provider && !allIds.slice(0, 5).includes(provider)) ? "selected" : ""} aria-label="More providers" aria-expanded={more} title="More providers" onClick={() => setMore(!more)}><MoreHorizontal size={19} /></button>
-        </nav>
-        {more ? <div className="provider-picker" aria-label="More provider filters">{allIds.slice(5).map((id) => <button key={id} onClick={() => pick(id)} aria-label={`${providerName(id)} connections`}><ProviderLogo provider={id} /><span>{providerName(id)}</span></button>)}</div> : null}
+        </nav> : null}
+        {more && view !== "cleanup" ? <div className="provider-picker" aria-label="More provider filters">{allIds.slice(5).map((id) => <button key={id} onClick={() => pick(id)} aria-label={`${providerName(id)} connections`}><ProviderLogo provider={id} /><span>{providerName(id)}</span></button>)}</div> : null}
 
         {view === "list" ? <>
           <div className="search-wrap"><Search size={16} /><input aria-label="Search connections" placeholder="Search connections" value={query} onChange={(event) => setQuery(event.currentTarget.value)} />{query ? <button aria-label="Clear search" onClick={() => setQuery("")}><X size={14} /></button> : null}</div>
-          <div className="section-heading"><h2>{provider ? providerName(provider) : "Connections"} <span>({filtered.length})</span></h2><button aria-label="Rescan" title="Rescan local files" disabled={loading} onClick={() => void useConnLensStore.getState().rescan()}><RefreshCw size={15} className={loading ? "spinning" : ""} /></button></div>
+          <div className="section-heading"><h2>{provider ? providerName(provider) : "Connections"} <span>({filtered.length})</span></h2><div className="heading-actions"><button aria-label="Validate and review cleanup" title="Validate and review cleanup" disabled={loading} onClick={() => void useConnLensStore.getState().reviewCleanup()}><ListChecks size={16} /></button><button aria-label="Rescan" title="Rescan local files" disabled={loading} onClick={() => void useConnLensStore.getState().rescan()}><RefreshCw size={15} className={loading ? "spinning" : ""} /></button></div></div>
           <section ref={content} className="content-region" aria-label="Detected connections" aria-busy={loading}>
             {snapshot?.historyResetNotice ? <div className="notice" role="status">History recovered from backup.<button onClick={() => void useConnLensStore.getState().dismissHistoryNotice()}>Dismiss</button></div> : null}
             {snapshot?.providerErrors.length ? <details className="scan-errors"><summary>{snapshot.providerErrors.length} source{snapshot.providerErrors.length === 1 ? " needs" : "s need"} attention</summary>{snapshot.providerErrors.map((error, i) => <p key={`${error.provider}-${i}`}><strong>{providerName(error.provider)}</strong>: {error.message}</p>)}</details> : null}
@@ -88,8 +89,8 @@ function App() {
             <ConnectionList groups={groups} />
           </section>
           <div className="scan-status" role="status"><span className={`watcher ${health ?? "paused"}`} /><div>{healthText}<small>{!isNativeApp() ? "Preview data · " : ""}{snapshot?.lastScan ? `Last scan: ${formatScanTime(snapshot.lastScan)}` : "No completed scan"}</small></div></div>
-        </> : <SettingsView settings={snapshot?.settings} />}
-        <footer className="footer"><button onClick={() => setView(view === "list" ? "settings" : "list")}>{view === "list" ? <Settings size={14} /> : <Grid2X2 size={14} />}{view === "list" ? "Settings" : "Connections"}</button><button aria-label="Quit ConnLens" onClick={() => void api.quitApp().catch(() => setToast("Could not quit ConnLens."))}><Power size={14} />Quit</button></footer>
+        </> : view === "cleanup" ? <CleanupView /> : <SettingsView settings={snapshot?.settings} />}
+        <footer className="footer"><button disabled={cleanupExecuting} onClick={() => setView(view === "list" ? "settings" : "list")}>{view === "list" ? <Settings size={14} /> : <Grid2X2 size={14} />}{view === "list" ? "Settings" : "Connections"}</button><button disabled={cleanupExecuting} aria-label="Quit ConnLens" onClick={() => void api.quitApp().catch(() => setToast("Could not quit ConnLens."))}><Power size={14} />Quit</button></footer>
         {toast ? <div className="toast" role="status"><span>{toast}</span><button aria-label="Dismiss message" onClick={() => setToast(null)}><X size={13} /></button></div> : null}
       </main>
     </div>

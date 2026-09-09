@@ -1,3 +1,4 @@
+use crate::cleanup::{self, CleanupRequest, CleanupResult, CleanupReview, CleanupState};
 use crate::descriptors;
 use crate::models::{is_retired_provider_id, ErrorPayload, Settings, Snapshot};
 use crate::registry;
@@ -8,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 pub type CommandResult<T> = Result<T, ErrorPayload>;
@@ -70,16 +71,61 @@ pub fn rescan_internal(
 }
 
 #[tauri::command]
+pub async fn review_cleanup(app: AppHandle) -> CommandResult<CleanupReview> {
+    let worker = app.clone();
+    let review = tauri::async_runtime::spawn_blocking(move || {
+        cleanup::review(worker.state::<CleanupState>().inner())
+    })
+    .await
+    .map_err(|_| ErrorPayload::new("cleanup_failed", "Local validation could not complete."))??;
+    emit_snapshot(Some(&app), &review.snapshot);
+    Ok(review)
+}
+
+#[tauri::command]
+pub async fn execute_cleanup(
+    app: AppHandle,
+    request: CleanupRequest,
+) -> CommandResult<CleanupResult> {
+    let worker = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        cleanup::execute(worker.state::<CleanupState>().inner(), request)
+    })
+    .await
+    .map_err(|_| {
+        ErrorPayload::new(
+            "cleanup_failed",
+            "Cleanup could not complete. Review local sources again.",
+        )
+    })??;
+    emit_snapshot(Some(&app), &result.snapshot);
+    Ok(result)
+}
+
+// Older clients can only remove history. They must pass the same fresh source
+// validation as the review flow; persisted Missing status alone is insufficient.
+#[tauri::command]
 pub fn remove(id: String) -> CommandResult<Snapshot> {
-    registry::with_registry(|registry| registry.remove(&id))
-        .map_err(ErrorPayload::from)?
-        .map_err(ErrorPayload::from)?;
-    snapshot_with_autostart(None)
+    registry::with_registry(|registry| {
+        let snapshot = scan::refresh_registry(registry, None, &descriptors::ScanPaths::current());
+        registry.remove(&id).map(|_| {
+            registry.snapshot(
+                registry.file.provider_errors.clone(),
+                snapshot.watcher_health,
+            )
+        })
+    })
+    .map_err(ErrorPayload::from)?
+    .map_err(ErrorPayload::from)
 }
 
 #[tauri::command]
 pub fn purge_missing() -> CommandResult<usize> {
-    registry::with_registry(|registry| registry.purge_missing()).map_err(ErrorPayload::from)
+    registry::with_registry(|registry| {
+        scan::refresh_registry(registry, None, &descriptors::ScanPaths::current());
+        registry.purge_missing()
+    })
+    .map_err(ErrorPayload::from)
 }
 
 #[tauri::command]

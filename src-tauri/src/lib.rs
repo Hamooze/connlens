@@ -1,3 +1,4 @@
+pub mod cleanup;
 pub mod cli;
 pub mod commands;
 pub mod credman;
@@ -295,6 +296,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .manage(PopoverState::default())
+        .manage(cleanup::CleanupState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_popover(app, None);
         }))
@@ -341,6 +343,8 @@ pub fn run() {
             commands::copy_value,
             commands::dismiss_history_reset_notice,
             commands::get_state,
+            commands::review_cleanup,
+            commands::execute_cleanup,
             commands::mark_all_seen,
             commands::open_dashboard,
             commands::open_external_url,

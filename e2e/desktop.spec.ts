@@ -9,6 +9,8 @@ function row(id: string, provider: string, name: string, label: string, status: 
     source: { sourceType: "config_file", path: `/fixtures/${provider}/config.json`, descriptorId: provider },
     status, fingerprint: "sha256:12345678", firstSeen: now, lastSeen: now,
     hidden: false, seen: true, meta: {}, removable: status === "missing",
+    validation: { availability: status === "missing" ? "missing" : "available", usage: status === "missing" ? "unknown" : "selected",
+      checkedAt: now, reason: status === "missing" ? "Source was confirmed missing" : "Selected account exists in local config", reasonCode: "fixture" },
   };
 }
 const fixture: ConnLensSnapshot = {
@@ -30,10 +32,16 @@ async function installIpcFixture(page: Page, platform: string) {
     const callbacks = new Map<number, (event: unknown) => void>();
     const listeners = new Map<number, number>();
     let nextId = 1;
+    let reviewId = 0;
     let state = structuredClone(snapshot);
     host.__CONNLENS_TEST__ = {
       calls,
       failNext: null,
+      cleanupMode: "success",
+      cleanupFiles: [
+        { id: "old-file", path: "/fixtures/neon/leftover.json", eligible: true, reason: "Reviewed leftover file", sizeBytes: 48 },
+        { id: "shared-file", path: "/fixtures/github/hosts.yml", eligible: false, reason: "Shared by another detected account", sizeBytes: 120 },
+      ],
       emit(next: typeof snapshot) {
         state = structuredClone(next);
         for (const [id, callbackId] of listeners) callbacks.get(callbackId)?.({ event: "state://updated", id, payload: state });
@@ -56,7 +64,29 @@ async function installIpcFixture(page: Page, platform: string) {
           case "get_state": return structuredClone(state);
           case "rescan": state.lastScan = new Date().toISOString(); return structuredClone(state);
           case "update_settings": state.settings = args.settings; return structuredClone(state);
-          case "remove": state.connections = state.connections.filter((row) => row.id !== args.id); return structuredClone(state);
+          case "review_cleanup": {
+            state.lastScan = new Date().toISOString();
+            return { reviewId: `review-${++reviewId}`, checkedAt: state.lastScan, snapshot: structuredClone(state),
+              entries: state.connections.map((connection) => ({ id: connection.id, label: connection.identity.label,
+                providerName: connection.providerName, eligible: connection.status === "missing",
+                reason: connection.status === "missing" ? "Source was confirmed missing" : "Still available in local config",
+                ...(connection.id === "old" ? { fileId: "old-file" } : {}) })),
+              files: structuredClone(host.__CONNLENS_TEST__.cleanupFiles) };
+          }
+          case "execute_cleanup": {
+            const request = args.request;
+            if (request.reviewId !== `review-${reviewId}`) throw { code: "stale_review", message: "Review is out of date" };
+            if (host.__CONNLENS_TEST__.cleanupMode === "stale") throw { code: "stale_review", message: "The source changed. Review again." };
+            const eligibleIds = state.connections.filter((connection) => connection.status === "missing").map((connection) => connection.id);
+            const removedIds = request.connectionIds.filter((id: string) => eligibleIds.includes(id));
+            const retained = request.connectionIds.filter((id: string) => !eligibleIds.includes(id)).map((id: string) => ({ id, reason: "Still available in local config" }));
+            state.connections = state.connections.filter((connection) => !removedIds.includes(connection.id));
+            const files = host.__CONNLENS_TEST__.cleanupFiles.filter((file: any) => request.fileIds.includes(file.id));
+            const partial = host.__CONNLENS_TEST__.cleanupMode === "partial";
+            return { snapshot: structuredClone(state), removedIds, retained,
+              trashedPaths: partial ? [] : files.filter((file: any) => file.eligible).map((file: any) => file.path),
+              fileFailures: files.filter((file: any) => partial || !file.eligible).map((file: any) => ({ id: file.id, reason: partial ? "Could not move the reviewed file to Trash" : file.reason })) };
+          }
           case "add_custom_provider": {
             const connection = structuredClone(state.connections[0]);
             connection.id = "custom-fixture";
@@ -124,17 +154,28 @@ test("provider filters and search retain the compact panel layout", async ({ pag
   await page.screenshot({ path: testInfo.outputPath("connections.png") });
 });
 
-test("connection details copy through IPC and protect active entries", async ({ page }) => {
+test("connection details copy through IPC and require a fresh cleanup review", async ({ page }) => {
   await page.getByRole("button", { name: /dev@fixture\.test/ }).click();
   await expect(page.getByRole("button", { name: "Copy identity", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Remove entry", exact: true })).toBeDisabled();
+  await expect(page.getByText("Available locally", { exact: true })).toBeVisible();
+  await expect(page.getByText("Selected in local config", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Copy identity", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__CONNLENS_TEST__.calls.some((call: any) => call.command === "copy_value" && call.args.id === "gh-main" && call.args.field === "identity"))).toBe(true);
   await expect(page.getByText("Copied", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Review removal", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Select dev@fixture.test", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Remove selected", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
   await page.getByRole("button", { name: /old@fixture\.test/ }).click();
-  await expect(page.getByRole("button", { name: "Remove entry", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Remove entry", exact: true }).click();
-  await expect(page.getByText("old@fixture.test", { exact: true })).toBeHidden();
+  await page.getByRole("button", { name: "Review removal", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Select old@fixture.test", exact: true })).toBeChecked();
+  expect(await page.evaluate(() => (window as any).__CONNLENS_TEST__.calls.filter((call: any) => call.command === "execute_cleanup").length)).toBe(0);
+  await page.getByRole("button", { name: "Remove selected", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__CONNLENS_TEST__.state().connections.some((connection: any) => connection.id === "old"))).toBe(false);
+  const calls = await page.evaluate(() => (window as any).__CONNLENS_TEST__.calls);
+  expect(calls.filter((call: any) => call.command === "review_cleanup")).toHaveLength(2);
+  expect(calls.find((call: any) => call.command === "execute_cleanup").args.request).toEqual({ reviewId: "review-2", connectionIds: ["old"], fileIds: [] });
+  expect(calls.some((call: any) => ["remove", "purge_missing"].includes(call.command))).toBe(false);
 });
 
 test("settings persist and watcher events update the list", async ({ page }, testInfo) => {
@@ -149,10 +190,70 @@ test("settings persist and watcher events update the list", async ({ page }, tes
     const fixture = (window as any).__CONNLENS_TEST__;
     const next = fixture.state();
     next.connections[0].identity.label = "updated@fixture.test";
+    next.connections[0].validation = { availability: "available", usage: "referenced", checkedAt: "2026-09-10T10:01:00.000Z",
+      reason: "Another local profile is selected", reasonCode: "profile_reference" };
     fixture.emit(next);
   });
   await expect(page.getByText("updated@fixture.test", { exact: true })).toBeVisible();
   await expect(page.getByText("dev@fixture.test", { exact: true })).toBeHidden();
+  await page.getByRole("button", { name: /updated@fixture\.test/ }).click();
+  await expect(page.getByText("Available locally", { exact: true })).toBeVisible();
+  await expect(page.getByText("Referenced locally", { exact: true })).toBeVisible();
+  await expect(page.getByText("Another local profile is selected", { exact: true })).toBeVisible();
+});
+
+test("cleanup files require explicit opt-in and keep shared sources blocked", async ({ page }, testInfo) => {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Review cleanup", exact: true }).click();
+  const include = page.getByRole("checkbox", { name: "Include leftover files", exact: true });
+  await expect(include).not.toBeChecked();
+  await include.check();
+  const leftover = page.getByRole("checkbox", { name: "Move /fixtures/neon/leftover.json to Trash", exact: true });
+  await expect(leftover).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "Move /fixtures/github/hosts.yml to Trash", exact: true })).toBeDisabled();
+  await expect(page.getByText("Shared by another detected account", { exact: true })).toBeVisible();
+  await leftover.check();
+  const remove = page.getByRole("button", { name: "Remove selected", exact: true });
+  await remove.scrollIntoViewIfNeeded();
+  const bounds = await remove.boundingBox();
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(testInfo.project.use.viewport!.height);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("cleanup-review.png") });
+  await remove.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__CONNLENS_TEST__.calls.filter((call: any) => call.command === "execute_cleanup").length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__CONNLENS_TEST__.calls.find((call: any) => call.command === "execute_cleanup").args.request))
+    .toEqual({ reviewId: "review-1", connectionIds: ["old"], fileIds: ["old-file"] });
+  await expect(page.getByRole("button", { name: "Review again", exact: true })).toBeVisible();
+});
+
+test("a stale cleanup review retains data and requires another review before retry", async ({ page }) => {
+  await page.evaluate(() => { (window as any).__CONNLENS_TEST__.cleanupMode = "stale"; });
+  await page.getByRole("button", { name: "Validate and review cleanup", exact: true }).click();
+  await page.getByRole("button", { name: "Remove selected", exact: true }).click();
+  await expect(page.getByText("The source changed. Review again.", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__CONNLENS_TEST__.state().connections.some((connection: any) => connection.id === "old"))).toBe(true);
+  await page.evaluate(() => { (window as any).__CONNLENS_TEST__.cleanupMode = "success"; });
+  await page.getByRole("button", { name: "Review again", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Select old@fixture.test", exact: true })).toBeChecked();
+  await page.getByRole("button", { name: "Remove selected", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__CONNLENS_TEST__.calls.filter((call: any) => call.command === "execute_cleanup").length)).toBe(2);
+  expect(await page.evaluate(() => (window as any).__CONNLENS_TEST__.calls.filter((call: any) => call.command === "execute_cleanup").map((call: any) => call.args.request.reviewId)))
+    .toEqual(["review-1", "review-2"]);
+});
+
+test("partial cleanup reports file failures and preserves unrelated connections", async ({ page }, testInfo) => {
+  await page.evaluate(() => { (window as any).__CONNLENS_TEST__.cleanupMode = "partial"; });
+  await page.getByRole("button", { name: "Validate and review cleanup", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Include leftover files", exact: true }).check();
+  await page.getByRole("checkbox", { name: "Move /fixtures/neon/leftover.json to Trash", exact: true }).check();
+  await page.getByRole("button", { name: "Remove selected", exact: true }).click();
+  await expect(page.getByText("Could not move the reviewed file to Trash", { exact: true })).toBeVisible();
+  await expect(page.getByText("/fixtures/neon/leftover.json", { exact: true })).toBeVisible();
+  const remaining = await page.evaluate(() => (window as any).__CONNLENS_TEST__.state().connections.map((connection: any) => connection.id));
+  expect(remaining).toEqual(["gh-main", "vercel-main"]);
+  expect(await page.evaluate(() => (window as any).__CONNLENS_TEST__.calls.filter((call: any) => call.command === "execute_cleanup").length)).toBe(1);
+  await expect(page.getByRole("button", { name: "Review again", exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("cleanup-result.png") });
 });
 
 test("custom provider form preserves a failed submission and clears a successful one", async ({ page }) => {

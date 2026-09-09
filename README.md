@@ -2,7 +2,7 @@
 
 ConnLens is a local-only Tauri 2 utility for inspecting developer app connections found in local configuration. It uses a compact tray/menu-bar panel with provider filters, searchable accounts, expandable redacted details, Settings, and Quit. On macOS the panel has a top pointer, monochrome icons, a blue selected tab, dark inset cards, and a two-button footer. Closing the panel hides it; Quit exits the application.
 
-The application does not make provider API requests, collect telemetry, authenticate to external services, or sync data. Explicit “Open dashboard” and website links open the system browser. Detected status means local configuration exists; it does not prove that a credential is accepted by a provider.
+The application does not make provider API requests, collect telemetry, authenticate to external services, or sync data. Explicit “Open dashboard” and website links open the system browser. Available status means a local reference exists; it does not prove that a credential is accepted by a provider.
 
 ## Providers and data
 
@@ -11,6 +11,22 @@ Bundled providers: AWS, Azure, Cloudflare, Docker, GitHub, GitLab, Google Cloud,
 Settings controls file watching, fallback scanning, notifications, and start at login. Changes to process environment values require a rescan or application restart; they are not file-watch events. Custom providers accept local config paths or environment-variable names and standard JSON, YAML, INI, or TOML formats. Custom descriptors are stored under the app-data `providers` directory. Credential Manager enumeration is currently a stub, including on Windows. Discovery uses supported local configuration files and environment values; vault-only accounts are not detected.
 
 `CONNLENS_HOME` activates fixture isolation as well as selecting the app-data directory. Standard user/config locations resolve inside this directory; inherited credential environment variables, OS credential stores, and external custom paths are excluded. Startup registration and notifications are also isolated, and separate fixture homes use separate runtime instances. Automated checks must always use this override.
+
+## Validation and cleanup
+
+Use the check-list button above Connections or **Settings → Review cleanup** to scan local sources and review saved history. Each entry shows availability, usage evidence, the last check time, and the reason for its classification:
+
+- **Available locally**: the scanner found the local reference.
+- **Missing locally**: a supported, enabled source was successfully checked and the historical reference is absent.
+- **Could not check**: a source is unreadable, unsupported, disabled, outside current scan scope, incomplete, or has no verifiable local source. These entries remain protected.
+
+**Selected in local config** means the provider explicitly identifies that account as selected. **Referenced locally** means a reference exists without proof of selection. Neither proves recent runtime use or that a provider accepts the credentials; validation makes no network calls.
+
+Only confirmed-missing entries are selected for cleanup. Review removal from an individual row preselects only that entry. Removal clears ConnLens history, and execution checks the current sources again under the registry lock. Reviews expire after five minutes and can be used once. Reappearing accounts and changed sources are retained with an explanation.
+
+**Include leftover files** adds a separate, initially unchecked file selection. This inventory covers only files associated with ConnLens entries, not applications, caches, or unrelated disk files. Eligible files must be empty after parsing, dedicated to a supported single-account configuration, owned by the current user where the OS exposes ownership, and inside the user folder. Every associated entry must be selected and still missing. Shared, project, meaningful/nonempty, oversized, unreadable, linked, and ConnLens internal files are protected. File content and identity are checked against the review immediately before the native Trash operation.
+
+macOS uses native Trash; Windows uses a recycle-only Recycle Bin operation; Linux uses desktop Trash. There is no permanent-delete fallback. A failed file move keeps the associated history, and results identify retained entries and file failures. Files can be recovered through the operating system's Trash. Automated tests use an injected temporary fixture mover; the shipped `CONNLENS_HOME` boundary refuses desktop Trash operations.
 
 ## Develop and validate
 
@@ -71,7 +87,7 @@ Native installers must be built on the matching operating system. The [Desktop v
 | Linux x64 | Ubuntu 22.04 | `.deb`, `.AppImage` |
 | Windows x64 | Windows Server 2022 | NSIS `.exe` |
 
-Each native job runs unit tests, builds installers, exercises the real executable against isolated fixtures, and checks bundle structure. macOS checks additionally verify ad-hoc signatures, architecture, and DMG integrity. A separate browser job exercises the production UI with WebKit at 360×520 and 390×520, and Chromium at 390×520, using mocked native commands for the respective platform presentation. Browser tests cover filtering/search, details/copy, deletion rules, settings persistence, watcher events, custom-provider validation/retry, scan errors, and Quit command dispatch.
+Each native job runs unit tests, builds installers, exercises the real executable against isolated fixtures, and checks bundle structure. macOS checks additionally verify ad-hoc signatures, architecture, and DMG integrity. A separate browser job exercises the production UI with WebKit at 360×520 and 390×520, and Chromium at 390×520, using mocked native commands for the respective platform presentation. Browser tests cover filtering/search, details/copy, reviewed history removal, explicit file selection, protected sources, stale reviews and partial results, settings persistence, watcher events, custom-provider validation/retry, scan errors, and Quit command dispatch.
 
 These checks provide separate evidence for UI behavior, native scanning, and packaging. They do not establish installation or native desktop behavior on every OS version. The workflow must run successfully for the current commit before its target builds can be called verified. Interactive acceptance remains necessary for tray placement/reopening, multiple monitors/scaling, OS clipboard and source reveal, autostart after login, system notifications, install/uninstall, and Linux desktop environments. Windows needs WebView2; Linux compatibility depends on WebKitGTK and the distribution libraries. The Ubuntu 22.04 build baseline follows [Tauri's AppImage compatibility guidance](https://v2.tauri.app/distribute/appimage/).
 
@@ -114,4 +130,4 @@ connlens status
 connlens providers --json
 ```
 
-`list --json` returns `{ "schemaVersion": 1, "connections": [] }`. It reads persisted metadata without rescanning unless `--rescan` is supplied. Missing entries are retained in history and included with `--all`. Scanning requires only local access; authentication against provider services is outside this application's behavior.
+`list --json` returns `{ "schemaVersion": 1, "connections": [] }`. It reads persisted metadata without rescanning unless `--rescan` is supplied. Each connection includes `validation` with `availability`, `usage`, `checkedAt`, `reason`, and `reasonCode`. Missing entries are retained in history and included with `--all`; older entries without validation are treated as unknown until checked. Scanning requires only local access; authentication against provider services is outside this application's behavior.

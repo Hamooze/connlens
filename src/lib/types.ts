@@ -1,6 +1,15 @@
 export type ConnectionStatus = "active" | "changed" | "missing" | "unverified";
 export type WatcherHealth = "ok" | "degraded" | "paused";
-export type ViewName = "list" | "settings";
+export type ViewName = "list" | "settings" | "cleanup";
+export type Availability = "available" | "missing" | "unknown";
+
+export interface ConnectionValidation {
+  availability: Availability;
+  usage: "selected" | "referenced" | "unknown";
+  checkedAt: string | null;
+  reason: string;
+  reasonCode: string;
+}
 
 export interface Identity {
   label: string;
@@ -29,6 +38,29 @@ export interface Connection {
   seen: boolean;
   meta: Record<string, unknown>;
   removable: boolean;
+  validation?: ConnectionValidation;
+}
+
+export interface CleanupReview {
+  reviewId: string;
+  checkedAt: string;
+  snapshot: ConnLensSnapshot;
+  entries: { id: string; label: string; providerName: string; eligible: boolean; reason: string; fileId?: string | null }[];
+  files: { id: string; path: string; eligible: boolean; reason: string; sizeBytes?: number | null }[];
+}
+
+export interface CleanupRequest {
+  reviewId: string;
+  connectionIds: string[];
+  fileIds: string[];
+}
+
+export interface CleanupResult {
+  snapshot: ConnLensSnapshot;
+  removedIds: string[];
+  trashedPaths: string[];
+  retained: { id: string; reason: string; label?: string }[];
+  fileFailures: { id: string; reason: string; path?: string }[];
 }
 
 export interface SettingsState {

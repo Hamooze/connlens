@@ -551,7 +551,7 @@ pub mod neon {
             meta.insert("confidence".to_string(), Value::String(confidence.clone()));
         }
 
-        let mut row = super::detected(
+        let row = super::detected(
             descriptor,
             label,
             descriptor.dashboard_url.clone(),
@@ -560,7 +560,6 @@ pub mod neon {
             Some(secutil::fingerprint(fingerprint.as_bytes())),
             meta,
         );
-        row.identity.is_active_identity = true;
         vec![row]
     }
 
@@ -729,7 +728,7 @@ pub mod shopify {
 
                 let fingerprint =
                     secutil::fingerprint(format!("shopify-account:{user_id}:{label}").as_bytes());
-                let mut row = super::detected(
+                let row = super::detected(
                     descriptor,
                     label,
                     descriptor.dashboard_url.clone(),
@@ -738,7 +737,6 @@ pub mod shopify {
                     Some(fingerprint),
                     meta,
                 );
-                row.identity.is_active_identity = true;
                 Some(row)
             })
             .collect()
@@ -1377,7 +1375,7 @@ mod tests {
             rows[0].identity.host.as_deref(),
             Some("https://admin.shopify.com")
         );
-        assert!(rows[0].identity.is_active_identity);
+        assert!(!rows[0].identity.is_active_identity);
         assert!(rows[0]
             .meta
             .get("userIdFingerprint")

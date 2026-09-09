@@ -130,30 +130,68 @@ pub fn load_all_scoped(home: &Path, paths: &ScanPaths) -> (Vec<Descriptor>, Vec<
     let mut errors = bundled_errors.clone();
 
     let user_dir = home.join("providers");
-    if let Some(Ok(read_dir)) = paths.allows(&user_dir).then(|| fs::read_dir(&user_dir)) {
-        let mut paths = read_dir
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                paths.allows(path) && path.extension().and_then(|ext| ext.to_str()) == Some("toml")
-            })
-            .collect::<Vec<_>>();
-        paths.sort();
-
-        for path in paths {
-            match fs::read_to_string(&path)
-                .ok()
-                .and_then(|text| toml::from_str::<Descriptor>(&text).ok())
-            {
-                Some(descriptor) => entries.push(descriptor),
-                None => errors.push(ProviderError {
-                    provider: "descriptors".to_string(),
-                    code: "invalid_user_descriptor".to_string(),
-                    message: "A user provider descriptor was skipped".to_string(),
-                    detail: Some(path.display().to_string()),
-                }),
+    let read_dir = if paths.allows(&user_dir) {
+        fs::read_dir(&user_dir)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "Provider directory is outside the permitted scan root",
+        ))
+    };
+    match read_dir {
+        Ok(read_dir) => {
+            let mut candidates = Vec::new();
+            for entry in read_dir {
+                match entry {
+                    Ok(entry) => {
+                        let path = entry.path();
+                        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+                            continue;
+                        }
+                        if paths.allows(&path) {
+                            candidates.push(path);
+                        } else {
+                            errors.push(ProviderError {
+                                provider: "descriptors".into(),
+                                code: "descriptor_out_of_scope".into(),
+                                message:
+                                    "A provider definition points outside the permitted scan root"
+                                        .into(),
+                                detail: None,
+                            });
+                        }
+                    }
+                    Err(_) => errors.push(ProviderError {
+                        provider: "descriptors".into(),
+                        code: "descriptor_directory_unreadable".into(),
+                        message: "The provider directory could not be fully read".into(),
+                        detail: None,
+                    }),
+                }
+            }
+            candidates.sort();
+            for path in candidates {
+                match crate::scan::parsers::read_regular_text(&path)
+                    .ok()
+                    .and_then(|text| toml::from_str::<Descriptor>(&text).ok())
+                {
+                    Some(descriptor) => entries.push(descriptor),
+                    None => errors.push(ProviderError {
+                        provider: "descriptors".into(),
+                        code: "invalid_user_descriptor".into(),
+                        message: "A user provider descriptor was skipped".into(),
+                        detail: Some(path.display().to_string()),
+                    }),
+                }
             }
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => errors.push(ProviderError {
+            provider: "descriptors".into(),
+            code: "descriptor_directory_unreadable".into(),
+            message: "The provider directory could not be read".into(),
+            detail: None,
+        }),
     }
 
     let mut merged = Vec::<Descriptor>::new();
@@ -174,6 +212,12 @@ pub fn load_all_scoped(home: &Path, paths: &ScanPaths) -> (Vec<Descriptor>, Vec<
 
 pub fn bundled_descriptors() -> Vec<Descriptor> {
     load_all(&app_home()).0
+}
+
+#[derive(Debug)]
+pub struct Expansion {
+    pub paths: Vec<PathBuf>,
+    pub complete: bool,
 }
 
 /// All discovery paths share one context, so fixture runs cannot inherit user homes.
@@ -250,21 +294,47 @@ impl ScanPaths {
     }
 
     pub fn expand(&self, pattern: &str) -> Vec<PathBuf> {
+        self.expand_checked(pattern).paths
+    }
+
+    pub fn expand_checked(&self, pattern: &str) -> Expansion {
         let Some(candidate) = self.expand_pattern(pattern) else {
-            return Vec::new();
+            return Expansion {
+                paths: Vec::new(),
+                complete: false,
+            };
         };
         let text = candidate.to_string_lossy();
-        if text.contains('*') || text.contains('?') || text.contains('[') {
-            let mut seen = BTreeSet::new();
-            return glob(&text)
-                .ok()
-                .into_iter()
-                .flat_map(|paths| paths.filter_map(Result::ok))
-                .filter(|path| self.allows(path) && seen.insert(path.clone()))
-                .take(50)
-                .collect();
+        if !text.contains(['*', '?', '[']) {
+            return Expansion {
+                paths: vec![candidate],
+                complete: true,
+            };
         }
-        vec![candidate]
+        let Ok(matches) = glob(&text) else {
+            return Expansion {
+                paths: Vec::new(),
+                complete: false,
+            };
+        };
+        let mut paths = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut complete = true;
+        for entry in matches {
+            match entry {
+                Ok(path) if self.allows(&path) => {
+                    if seen.insert(path.clone()) {
+                        if paths.len() == 50 {
+                            complete = false;
+                            break;
+                        }
+                        paths.push(path);
+                    }
+                }
+                Ok(_) | Err(_) => complete = false,
+            }
+        }
+        Expansion { paths, complete }
     }
 
     fn env_value(&self, key: &str) -> Option<String> {
@@ -293,6 +363,24 @@ impl ScanPaths {
 
 pub fn expand(pattern: &str) -> Vec<PathBuf> {
     ScanPaths::current().expand(pattern)
+}
+
+pub(crate) fn comparable_path(path: &Path) -> PathBuf {
+    let normalized = absolute_normalized(path).unwrap_or_else(|| path.to_path_buf());
+    let mut suffix = Vec::new();
+    for ancestor in normalized.ancestors() {
+        if let Ok(canonical) = ancestor.canonicalize() {
+            let mut result = canonical;
+            for part in suffix.into_iter().rev() {
+                result.push(part);
+            }
+            return result;
+        }
+        if let Some(name) = ancestor.file_name() {
+            suffix.push(name.to_os_string());
+        }
+    }
+    normalized
 }
 
 fn absolute_normalized(path: &Path) -> Option<PathBuf> {
@@ -455,7 +543,9 @@ mod tests {
 
     #[test]
     fn bundled_descriptors_have_unique_ids() {
-        let (descriptors, errors) = load_all(Path::new("missing-home"));
+        let fixture = tempfile::tempdir().unwrap();
+        let (descriptors, errors) =
+            load_all_scoped(fixture.path(), &ScanPaths::isolated(fixture.path()));
         assert!(errors.is_empty());
         let unique = descriptors
             .iter()
@@ -466,7 +556,9 @@ mod tests {
 
     #[test]
     fn vercel_project_links_require_explicit_project_roots() {
-        let (descriptors, errors) = load_all(Path::new("missing-home"));
+        let fixture = tempfile::tempdir().unwrap();
+        let (descriptors, errors) =
+            load_all_scoped(fixture.path(), &ScanPaths::isolated(fixture.path()));
         assert!(errors.is_empty());
         let vercel = descriptors
             .iter()

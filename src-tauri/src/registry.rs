@@ -1,7 +1,7 @@
 use crate::models::{
-    is_retired_provider_id, ChangeSet, Connection, ConnectionStatus, DetectedConnection,
-    ErrorPayload, Identity, RegisterEntry, RegistryFile, Settings, Snapshot, SnapshotConnection,
-    SourceType, WatcherHealth,
+    is_retired_provider_id, Availability, ChangeSet, Connection, ConnectionStatus,
+    ConnectionValidation, DetectedConnection, ErrorPayload, Identity, RegisterEntry, RegistryFile,
+    Settings, Snapshot, SnapshotConnection, SourceType, WatcherHealth,
 };
 use chrono::Utc;
 use serde_json::Value;
@@ -124,93 +124,6 @@ fn registry_path(home: &Path) -> PathBuf {
     home.join("registry.json")
 }
 
-fn is_ephemeral_project_link(connection: &Connection) -> bool {
-    connection
-        .meta
-        .get("kind")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| kind == "project_link")
-}
-
-fn is_superseded_fingerprint_fallback(
-    connection: &Connection,
-    seen_source_paths: &BTreeSet<(String, String)>,
-) -> bool {
-    let Some(path) = connection.source.path.as_ref() else {
-        return false;
-    };
-    let fallback_prefix = format!("{} (...", connection.provider_name);
-    connection.identity.label.starts_with(&fallback_prefix)
-        && connection.identity.label.ends_with(')')
-        && seen_source_paths.contains(&(connection.provider.clone(), path.clone()))
-}
-
-fn is_superseded_raw_identity(
-    connection: &Connection,
-    seen_source_paths: &BTreeSet<(String, String)>,
-) -> bool {
-    let Some(path) = connection.source.path.as_ref() else {
-        return false;
-    };
-
-    is_raw_identity_label(&connection.provider, &connection.identity.label)
-        && seen_source_paths.contains(&(connection.provider.clone(), path.clone()))
-}
-
-fn is_superseded_generic_identity(
-    connection: &Connection,
-    seen_friendly_source_paths: &BTreeSet<(String, String)>,
-    seen_friendly_providers: &BTreeSet<String>,
-) -> bool {
-    let Some(path) = connection.source.path.as_ref() else {
-        return false;
-    };
-
-    is_generic_identity_label(&connection.provider, &connection.identity.label)
-        && (seen_friendly_source_paths.contains(&(connection.provider.clone(), path.clone()))
-            || seen_friendly_providers.contains(&connection.provider))
-}
-
-fn is_friendly_identity_label(provider: &str, label: &str) -> bool {
-    !is_raw_identity_label(provider, label) && !is_generic_identity_label(provider, label)
-}
-
-fn is_generic_identity_label(provider: &str, label: &str) -> bool {
-    let label = label.trim();
-    matches!(
-        (provider, label),
-        ("azure", "AzureCloud")
-            | ("azure", "default")
-            | ("neon", "Neon account")
-            | ("vercel", "Vercel account")
-    )
-}
-
-fn is_raw_identity_label(provider: &str, label: &str) -> bool {
-    let label = label.trim();
-    match provider {
-        "neon" => is_uuid_like(label),
-        "vercel" => {
-            label.starts_with("team_")
-                || label.starts_with("usr_")
-                || (label.len() >= 20
-                    && label.len() <= 40
-                    && label.chars().all(|ch| ch.is_ascii_alphanumeric()))
-        }
-        _ => false,
-    }
-}
-
-fn is_uuid_like(value: &str) -> bool {
-    let parts = value.split('-').collect::<Vec<_>>();
-    let expected = [8, 4, 4, 4, 12];
-    parts.len() == expected.len()
-        && parts
-            .iter()
-            .zip(expected)
-            .all(|(part, len)| part.len() == len && part.chars().all(|ch| ch.is_ascii_hexdigit()))
-}
-
 fn backup_path(home: &Path) -> PathBuf {
     home.join("registry.json.bak")
 }
@@ -246,6 +159,15 @@ fn read_file(path: &Path) -> Result<RegistryFile, RegistryError> {
     let mut file: RegistryFile =
         serde_json::from_str(&text).map_err(|err| RegistryError::Parse(err.to_string()))?;
     file.settings.probes_enabled = false;
+    for connection in &mut file.connections {
+        if connection.validation.availability != Availability::Available {
+            connection.identity.is_active_identity = false;
+            connection.validation.usage = crate::models::Usage::Unknown;
+            if connection.validation.availability == Availability::Unknown {
+                connection.status = ConnectionStatus::Unverified;
+            }
+        }
+    }
     Ok(file)
 }
 
@@ -344,21 +266,18 @@ impl Registry {
     }
 
     pub fn diff(&mut self, detected: Vec<DetectedConnection>, scope: Option<&str>) -> ChangeSet {
-        self.diff_with_unavailable(detected, scope, &BTreeSet::new())
+        self.diff_with_validation(detected, scope, &BTreeMap::new())
     }
 
-    pub fn diff_with_unavailable(
+    pub fn diff_with_validation(
         &mut self,
         detected: Vec<DetectedConnection>,
-        scope: Option<&str>,
-        unavailable: &BTreeSet<String>,
+        _scope: Option<&str>,
+        validations: &BTreeMap<String, ConnectionValidation>,
     ) -> ChangeSet {
         let now = now_iso();
         let mut changes = ChangeSet::default();
         let mut seen_ids = BTreeSet::new();
-        let mut seen_source_paths = BTreeSet::new();
-        let mut seen_friendly_source_paths = BTreeSet::new();
-        let mut seen_friendly_providers = BTreeSet::new();
         let old_by_id = self
             .file
             .connections
@@ -377,15 +296,6 @@ impl Registry {
             if !seen_ids.insert(id.clone()) {
                 continue;
             }
-            if let Some(path) = detected.source.path.as_deref() {
-                let source_key = (detected.provider.clone(), path.to_string());
-                seen_source_paths.insert(source_key.clone());
-                if is_friendly_identity_label(&detected.provider, &detected.identity.label) {
-                    seen_friendly_source_paths.insert(source_key);
-                    seen_friendly_providers.insert(detected.provider.clone());
-                }
-            }
-
             // Preserve history when migrating IDs to include the profile scope.
             let existing = old_by_id.get(&id).or_else(|| {
                 self.file.connections.iter().find(|existing| {
@@ -403,6 +313,8 @@ impl Registry {
                 let fingerprint_changed = existing.fingerprint != detected.fingerprint
                     && existing.fingerprint.is_some()
                     && detected.fingerprint.is_some();
+                updated.validation =
+                    ConnectionValidation::available(&now, detected.identity.is_active_identity);
                 updated.provider_name = detected.provider_name;
                 updated.identity = detected.identity;
                 updated.source = detected.source;
@@ -424,6 +336,8 @@ impl Registry {
                 };
                 next.push(updated);
             } else {
+                let validation =
+                    ConnectionValidation::available(&now, detected.identity.is_active_identity);
                 let connection = Connection {
                     id: id.clone(),
                     provider: detected.provider,
@@ -431,6 +345,7 @@ impl Registry {
                     identity: detected.identity,
                     source: detected.source,
                     status: ConnectionStatus::Active,
+                    validation,
                     fingerprint: detected.fingerprint,
                     first_seen: now.clone(),
                     last_seen: now.clone(),
@@ -448,44 +363,26 @@ impl Registry {
                 continue;
             }
 
-            let in_scope = scope
-                .map(|provider| existing.provider == provider)
-                .unwrap_or(true)
-                && self
-                    .file
-                    .settings
-                    .provider_toggles
-                    .get(&existing.provider)
-                    .copied()
-                    != Some(false)
-                && !unavailable.contains(&existing.provider)
-                && !matches!(
-                    existing.source.source_type,
-                    SourceType::Cli | SourceType::AgentRegistered
-                );
-            if !seen_ids.contains(&existing.id) && in_scope {
-                if is_ephemeral_project_link(existing)
-                    || is_superseded_fingerprint_fallback(existing, &seen_source_paths)
-                    || is_superseded_raw_identity(existing, &seen_source_paths)
-                    || is_superseded_generic_identity(
-                        existing,
-                        &seen_friendly_source_paths,
-                        &seen_friendly_providers,
+            if !seen_ids.contains(&existing.id) {
+                let mut updated = existing.clone();
+                updated.validation = validations.get(&existing.id).cloned().unwrap_or_else(|| {
+                    ConnectionValidation::unknown(
+                        "not_checked",
+                        "This source was not validated in the current scan.",
+                        Some(now.clone()),
                     )
-                {
-                    continue;
+                });
+                updated.identity.is_active_identity = false;
+                if updated.validation.availability == Availability::Missing {
+                    if existing.validation.availability != Availability::Missing {
+                        changes.missing.push(updated.id.clone());
+                        updated.seen = false;
+                    }
+                    updated.status = ConnectionStatus::Missing;
+                } else {
+                    updated.status = ConnectionStatus::Unverified;
                 }
-                let mut missing = existing.clone();
-                if missing.status != ConnectionStatus::Missing {
-                    changes.missing.push(missing.id.clone());
-                }
-                if missing.status != ConnectionStatus::Missing {
-                    missing.seen = false;
-                }
-                missing.status = ConnectionStatus::Missing;
-                next.push(missing);
-            } else if !seen_ids.contains(&existing.id) {
-                next.push(existing.clone());
+                next.push(updated);
             }
         }
 
@@ -556,7 +453,7 @@ impl Registry {
         let before = self.file.connections.len();
         self.file
             .connections
-            .retain(|connection| connection.status != ConnectionStatus::Missing);
+            .retain(|connection| connection.validation.availability != Availability::Missing);
         before - self.file.connections.len()
     }
 
@@ -604,6 +501,11 @@ impl Registry {
             existing.identity = detected.identity;
             existing.meta = detected.meta;
             existing.status = ConnectionStatus::Unverified;
+            existing.validation = ConnectionValidation::unknown(
+                "manual_record",
+                "This is a manually registered entry; local availability and use are not verified.",
+                Some(existing.last_seen.clone()),
+            );
             existing.seen = false;
             return Ok(id);
         }
@@ -615,6 +517,11 @@ impl Registry {
             identity: detected.identity,
             source: detected.source,
             status: ConnectionStatus::Unverified,
+            validation: ConnectionValidation::unknown(
+                "manual_record",
+                "This is a manually registered entry; local availability and use are not verified.",
+                Some(now.clone()),
+            ),
             fingerprint: None,
             first_seen: now.clone(),
             last_seen: now,
@@ -924,7 +831,16 @@ mod tests {
             )],
             None,
         );
-        registry.diff(Vec::new(), Some("github"));
+        let id = registry.file.connections[0].id.clone();
+        let proof = BTreeMap::from([(
+            id,
+            ConnectionValidation::missing(
+                &now_iso(),
+                "source_missing",
+                "Fixture source was checked and is absent.",
+            ),
+        )]);
+        registry.diff_with_validation(Vec::new(), Some("github"), &proof);
         assert_eq!(
             registry.file.connections[0].status,
             ConnectionStatus::Missing
@@ -934,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn project_link_rows_are_pruned_when_missing() {
+    fn project_link_history_is_retained_without_source_evidence() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let mut project = detected(
@@ -955,11 +871,16 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 1);
 
         registry.diff(Vec::new(), Some("vercel"));
-        assert!(registry.file.connections.is_empty());
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(
+            registry.file.connections[0].validation.availability,
+            Availability::Unknown
+        );
+        assert!(!registry.file.connections[0].removable());
     }
 
     #[test]
-    fn fingerprint_fallback_rows_are_pruned_when_source_has_active_identity() {
+    fn fingerprint_fallback_history_is_retained_when_identity_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let source = "C:/Users/dev/.config/neonctl/credentials.json";
@@ -984,12 +905,16 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 1);
 
         registry.diff(vec![user], Some("neon"));
-        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections.len(), 2);
         assert_eq!(registry.file.connections[0].identity.label, "usr_fixture_1");
+        assert_eq!(
+            registry.file.connections[1].validation.availability,
+            Availability::Unknown
+        );
     }
 
     #[test]
-    fn raw_identity_rows_are_pruned_when_source_has_clean_label() {
+    fn raw_identity_history_is_retained_when_label_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let source = "C:/Users/dev/.config/neonctl/credentials.json";
@@ -1014,12 +939,16 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 1);
 
         registry.diff(vec![clean], Some("neon"));
-        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections.len(), 2);
         assert_eq!(registry.file.connections[0].identity.label, "Neon account");
+        assert_eq!(
+            registry.file.connections[1].validation.availability,
+            Availability::Unknown
+        );
     }
 
     #[test]
-    fn generic_identity_rows_are_pruned_when_source_has_clean_label() {
+    fn generic_identity_history_is_retained_when_label_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let source = "C:/Users/dev/.config/neonctl/credentials.json";
@@ -1044,7 +973,7 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 1);
 
         registry.diff(vec![clean], Some("neon"));
-        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections.len(), 2);
         assert_eq!(
             registry.file.connections[0].identity.label,
             "neon.profile@example.test"
@@ -1052,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn azure_generic_config_rows_are_pruned_when_profile_account_exists() {
+    fn azure_config_history_is_retained_when_profile_account_appears() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let config_source = "C:/Users/dev/.azure/config";
@@ -1083,7 +1012,7 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 2);
 
         registry.diff(vec![account], Some("azure"));
-        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections.len(), 3);
         assert_eq!(
             registry.file.connections[0].identity.label,
             "azure.user@example.test"
@@ -1108,6 +1037,34 @@ mod tests {
         let recovered = Registry::load(dir.path()).unwrap();
         assert!(recovered.history_reset_notice);
         assert_eq!(recovered.file.connections.len(), 1);
+    }
+
+    #[test]
+    fn legacy_missing_status_without_validation_never_authorizes_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        registry.diff(
+            vec![detected("legacy", "github.com", "hosts.yml", None)],
+            None,
+        );
+        let mut json = serde_json::to_value(&registry.file).unwrap();
+        let row = &mut json["connections"][0];
+        row.as_object_mut().unwrap().remove("validation");
+        row["status"] = serde_json::json!("missing");
+        row["identity"]["isActiveIdentity"] = serde_json::json!(true);
+        fs::write(
+            dir.path().join("registry.json"),
+            serde_json::to_vec(&json).unwrap(),
+        )
+        .unwrap();
+        let mut restored = Registry::load(dir.path()).unwrap();
+        let row = &restored.file.connections[0];
+        assert_eq!(row.validation.availability, Availability::Unknown);
+        assert_eq!(row.validation.usage, crate::models::Usage::Unknown);
+        assert!(row.validation.checked_at.is_none());
+        assert!(!row.identity.is_active_identity);
+        assert!(!row.removable());
+        assert_eq!(restored.purge_missing(), 0);
     }
 
     #[test]
@@ -1137,6 +1094,7 @@ mod tests {
             identity: row.identity,
             source: row.source,
             status: ConnectionStatus::Active,
+            validation: ConnectionValidation::default(),
             fingerprint: None,
             first_seen: "2026-08-06T00:00:00.000Z".to_string(),
             last_seen: "2026-08-06T00:00:00.000Z".to_string(),

@@ -6,7 +6,7 @@ import { useConnLensStore } from "../lib/store";
 import type { SettingsState } from "../lib/types";
 
 export const SettingsView = memo(function SettingsView({ settings }: { settings?: SettingsState }) {
-  const { updateSettings, purgeMissing, resetAppData } = useConnLensStore.getState();
+  const { updateSettings, reviewCleanup, resetAppData } = useConnLensStore.getState();
   const [confirmReset, setConfirmReset] = useState(false);
   if (!settings) return <section className="settings-view"><p>Settings are unavailable until ConnLens loads.</p><button onClick={() => void useConnLensStore.getState().load()}>Try again</button></section>;
   return <section className="settings-view" aria-label="Settings">
@@ -18,7 +18,7 @@ export const SettingsView = memo(function SettingsView({ settings }: { settings?
       <label className="field-row">Fallback interval<select aria-label="Fallback scan interval" value={settings.pollMinutes} onChange={(event) => void updateSettings({ pollMinutes: Number(event.currentTarget.value) })}><option value={5}>5 min</option><option value={10}>10 min</option><option value={30}>30 min</option></select></label>
     </section>
     <details className="settings-card custom-provider"><summary><span>Custom providers<small>Add a local config or environment source.</small></span><ChevronRight size={16} /></summary><CustomProviderForm /></details>
-    <section className="settings-card data-settings"><h3>Data</h3><button onClick={() => void purgeMissing()}>Remove missing entries<ChevronRight size={14} /></button>{!confirmReset ? <button onClick={() => setConfirmReset(true)}>Reset app data<ChevronRight size={14} /></button> : <div className="reset-confirm"><p>Clear ConnLens history, custom providers and settings? Your source account files stay unchanged.</p><button className="danger-action" onClick={() => { void resetAppData(); setConfirmReset(false); }}>Confirm reset</button><button onClick={() => setConfirmReset(false)}>Cancel</button></div>}</section>
+    <section className="settings-card data-settings"><h3>Data</h3><button onClick={() => void reviewCleanup()}>Review cleanup<ChevronRight size={14} /></button>{!confirmReset ? <button onClick={() => setConfirmReset(true)}>Reset app data<ChevronRight size={14} /></button> : <div className="reset-confirm"><p>Clear ConnLens history, custom providers and settings? Your source account files stay unchanged.</p><button className="danger-action" onClick={() => { void resetAppData(); setConfirmReset(false); }}>Confirm reset</button><button onClick={() => setConfirmReset(false)}>Cancel</button></div>}</section>
     <div className="privacy-note">Accounts stay on this device.<a href="https://nemu.ae" onClick={(event) => { event.preventDefault(); void api.openExternalUrl("https://nemu.ae").catch(() => useConnLensStore.getState().setToast("Could not open Nemu.")); }}>Made by Nemu</a></div>
   </section>;
 });
