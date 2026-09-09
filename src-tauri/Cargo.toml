@@ -2,7 +2,8 @@
 name = "connlens"
 version = "0.1.0"
 description = "Local-only macOS, Windows, and Linux tray utility for developer app connection visibility."
-authors = ["Hamza"]
+authors = ["Nemu"]
+homepage = "https://nemu.ae"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

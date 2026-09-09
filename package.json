@@ -1,5 +1,10 @@
 {
   "name": "connlens",
+  "author": {
+    "name": "Nemu",
+    "url": "https://nemu.ae"
+  },
+  "homepage": "https://nemu.ae",
   "private": true,
   "version": "0.1.0",
   "type": "module",

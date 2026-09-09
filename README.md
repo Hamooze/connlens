@@ -1,5 +1,7 @@
 # ConnLens
 
+ConnLens is developed and owned by [Nemu](https://nemu.ae). Its application identifier is `com.nemu.connlens`, and its installer publisher is Nemu. Copyright © 2026 Nemu.
+
 ConnLens is a local-only Tauri 2 utility for inspecting developer app connections found in local configuration. It uses a compact tray/menu-bar panel with provider filters, searchable accounts, expandable redacted details, Settings, and Quit. On macOS the panel has a top pointer, monochrome icons, a blue selected tab, dark inset cards, and a two-button footer. Closing the panel hides it; Quit exits the application. On macOS, the bundle declares its menu-bar agent role at launch so window-management utilities can recognize it as a background app. Reopening ConnLens from Applications or Spotlight restores the existing panel.
 
 The application does not make provider API requests, collect telemetry, authenticate to external services, or sync data. Explicit “Open dashboard” and website links open the system browser. Available status means a local reference exists; it does not prove that a credential is accepted by a provider.
@@ -11,6 +13,8 @@ Bundled providers: AWS, Azure, Cloudflare, Docker, GitHub, GitLab, Google Cloud,
 Settings controls file watching, fallback scanning, notifications, and start at login. Changes to process environment values require a rescan or application restart; they are not file-watch events. Custom providers accept local config paths or environment-variable names and standard JSON, YAML, INI, or TOML formats. Custom descriptors are stored under the app-data `providers` directory. Credential Manager enumeration is currently a stub, including on Windows. Discovery uses supported local configuration files and environment values; vault-only accounts are not detected.
 
 `CONNLENS_HOME` activates fixture isolation as well as selecting the app-data directory. Standard user/config locations resolve inside this directory; inherited credential environment variables, OS credential stores, and external custom paths are excluded. Startup registration and notifications are also isolated, and separate fixture homes use separate runtime instances. Automated checks must always use this override.
+
+When upgrading from the former `com.brdg.connlens` identifier, quit the old app before launching the Nemu build. The default macOS data folder moves from `com.brdg.ConnLens` to `com.nemu.ConnLens`, preserving history, settings, and custom providers. An existing Nemu data folder is never overwritten. Normal Windows and Linux data paths remain unchanged, as do login startup entries. Windows users who previously chose a custom installation folder may need to select that folder again in the installer.
 
 ## Validation and cleanup
 

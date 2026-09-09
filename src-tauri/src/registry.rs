@@ -78,15 +78,176 @@ pub fn app_home() -> PathBuf {
         return PathBuf::from(path);
     }
 
+    default_home("nemu")
+}
+
+fn default_home(owner: &str) -> PathBuf {
     if cfg!(windows) {
         if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
             return PathBuf::from(local).join("ConnLens");
         }
     }
 
-    directories::ProjectDirs::from("com", "brdg", "ConnLens")
+    directories::ProjectDirs::from("com", owner, "ConnLens")
         .map(|dirs| dirs.data_local_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".connlens"))
+}
+
+fn prepare_home(home: &Path) -> Result<(), RegistryError> {
+    // Explicit fixture homes never inspect or migrate the user's default data.
+    if std::env::var_os("CONNLENS_HOME").is_some() {
+        return Ok(());
+    }
+    prepare_home_at(home, &default_home("brdg"), &default_home("nemu"))
+}
+
+pub(crate) fn prepare_app_home() -> Result<(), RegistryError> {
+    prepare_home(&app_home())
+}
+
+fn prepare_home_at(home: &Path, legacy: &Path, current: &Path) -> Result<(), RegistryError> {
+    if home != current || legacy == current {
+        return Ok(());
+    }
+    move_legacy_home(legacy, current)
+}
+
+fn move_legacy_home(legacy: &Path, current: &Path) -> Result<(), RegistryError> {
+    // Never merge with or overwrite an existing Nemu namespace, including an
+    // empty directory or a symbolic link supplied by another process.
+    match fs::symlink_metadata(current) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    match fs::symlink_metadata(legacy) {
+        Ok(metadata) if metadata.is_dir() && !is_directory_link(&metadata) => {}
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Legacy ConnLens data is not a regular directory; it was left unchanged",
+            )
+            .into())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+
+    // Hold the existing registry lock during the move. Do not copy the tree:
+    // the atomic rename preserves every file and permission without following
+    // any links inside it, and a failed move leaves the old namespace intact.
+    let Some(mut guard) = lock_legacy_for_migration(legacy, current)? else {
+        return Ok(());
+    };
+    if let Some(parent) = current.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match rename_directory_no_replace(legacy, current) {
+        Ok(()) => {
+            guard.path = lock_path(current);
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn lock_legacy_for_migration(
+    legacy: &Path,
+    current: &Path,
+) -> Result<Option<RegistryLock>, RegistryError> {
+    let path = lock_path(legacy);
+    let start = Instant::now();
+    loop {
+        if fs::symlink_metadata(current).is_ok() {
+            return Ok(None);
+        }
+        // Unlike the normal registry lock, never create the legacy directory.
+        // Another new process may have just moved it into the Nemu namespace.
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                let _ = writeln!(file, "pid={}", std::process::id());
+                return Ok(Some(RegistryLock { path }));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if start.elapsed() >= Duration::from_secs(2) {
+                    return Err(RegistryError::Locked);
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && fs::symlink_metadata(current).is_ok() =>
+            {
+                return Ok(None)
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn is_directory_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+fn rename_directory_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let from = CString::new(from.as_os_str().as_bytes())?;
+        let to = CString::new(to.as_os_str().as_bytes())?;
+        #[cfg(target_os = "macos")]
+        let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows::{
+            core::HSTRING,
+            Win32::Storage::FileSystem::{MoveFileExW, MOVE_FILE_FLAGS},
+        };
+        // No REPLACE_EXISTING and no COPY_ALLOWED: fail safely if a rename is
+        // not available instead of overwriting or performing a partial copy.
+        unsafe {
+            MoveFileExW(
+                &HSTRING::from(from.as_os_str()),
+                &HSTRING::from(to.as_os_str()),
+                MOVE_FILE_FLAGS(0),
+            )
+        }
+        .map_err(|_| std::io::Error::last_os_error())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (from, to);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Atomic namespace migration is unavailable",
+        ))
+    }
 }
 
 pub fn now_iso() -> String {
@@ -133,6 +294,11 @@ fn lock_path(home: &Path) -> PathBuf {
 }
 
 fn lock(home: &Path) -> Result<RegistryLock, RegistryError> {
+    prepare_home(home)?;
+    lock_unprepared(home)
+}
+
+fn lock_unprepared(home: &Path) -> Result<RegistryLock, RegistryError> {
     fs::create_dir_all(home)?;
     let path = lock_path(home);
     let start = Instant::now();
@@ -182,6 +348,7 @@ fn archive_corrupt(path: &Path) {
 
 impl Registry {
     pub fn load(home: &Path) -> Result<Self, RegistryError> {
+        prepare_home(home)?;
         fs::create_dir_all(home)?;
         let primary = registry_path(home);
         let backup = backup_path(home);
@@ -647,6 +814,205 @@ fn reset_app_data_at(home: &Path) -> Result<(), RegistryError> {
 mod tests {
     use super::*;
     use crate::models::{ConnectionSource, SourceType};
+
+    #[test]
+    fn namespace_migration_preserves_the_complete_app_data_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy-owner");
+        let current = dir.path().join("nemu");
+        with_registry_at(&legacy, |registry| {
+            registry.file.settings.theme = "light".to_string();
+            registry.file.settings.watchers_enabled = false;
+        })
+        .unwrap();
+        fs::create_dir_all(legacy.join("providers/nested")).unwrap();
+        fs::create_dir_all(legacy.join("inbox")).unwrap();
+        fs::write(
+            legacy.join("providers/nested/custom.toml"),
+            "fixture provider",
+        )
+        .unwrap();
+        fs::write(legacy.join("inbox/entry.json"), "fixture registration").unwrap();
+        fs::write(legacy.join("registry.json.corrupt-fixture"), [0, 1, 2, 255]).unwrap();
+        let original_registry = fs::read(registry_path(&legacy)).unwrap();
+
+        prepare_home_at(&current, &legacy, &current).unwrap();
+
+        assert!(!legacy.exists());
+        assert_eq!(
+            fs::read(registry_path(&current)).unwrap(),
+            original_registry
+        );
+        assert_eq!(
+            fs::read_to_string(current.join("providers/nested/custom.toml")).unwrap(),
+            "fixture provider"
+        );
+        assert_eq!(
+            fs::read_to_string(current.join("inbox/entry.json")).unwrap(),
+            "fixture registration"
+        );
+        assert_eq!(
+            fs::read(current.join("registry.json.corrupt-fixture")).unwrap(),
+            [0, 1, 2, 255]
+        );
+        assert!(!lock_path(&current).exists());
+        let registry = Registry::load(&current).unwrap();
+        assert_eq!(registry.file.settings.theme, "light");
+        assert!(!registry.file.settings.watchers_enabled);
+        prepare_home_at(&current, &legacy, &current).unwrap();
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn namespace_migration_never_merges_or_overwrites_existing_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        fs::create_dir(&legacy).unwrap();
+        fs::create_dir(&current).unwrap();
+        fs::write(legacy.join("registry.json"), "legacy data").unwrap();
+        fs::write(current.join("registry.json"), "Nemu data").unwrap();
+        move_legacy_home(&legacy, &current).unwrap();
+        assert_eq!(
+            fs::read_to_string(legacy.join("registry.json")).unwrap(),
+            "legacy data"
+        );
+        assert_eq!(
+            fs::read_to_string(current.join("registry.json")).unwrap(),
+            "Nemu data"
+        );
+        assert!(!lock_path(&legacy).exists());
+    }
+
+    #[test]
+    fn explicit_fixture_home_does_not_migrate_default_namespaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        let fixture = dir.path().join("isolated");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("registry.json"), "original").unwrap();
+        prepare_home_at(&fixture, &legacy, &current).unwrap();
+        assert!(!current.exists());
+        assert!(!fixture.exists());
+        assert_eq!(
+            fs::read_to_string(legacy.join("registry.json")).unwrap(),
+            "original"
+        );
+        // Linux and the normal Windows storage override do not change path.
+        prepare_home_at(&legacy, &legacy, &legacy).unwrap();
+        assert_eq!(
+            fs::read_to_string(legacy.join("registry.json")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn simultaneous_namespace_migrations_preserve_data_without_recreating_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("registry.json"), "original").unwrap();
+        let held_lock = lock_unprepared(&legacy).unwrap();
+        let barrier = std::sync::Barrier::new(3);
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                barrier.wait();
+                move_legacy_home(&legacy, &current)
+            });
+            let second = scope.spawn(|| {
+                barrier.wait();
+                move_legacy_home(&legacy, &current)
+            });
+            barrier.wait();
+            // Both starters must wait for the existing transaction to release.
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(!current.exists());
+            drop(held_lock);
+            first.join().unwrap().unwrap();
+            second.join().unwrap().unwrap();
+        });
+        assert!(!legacy.exists());
+        assert!(!lock_path(&current).exists());
+        assert_eq!(
+            fs::read_to_string(current.join("registry.json")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn busy_legacy_namespace_does_not_create_an_empty_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("registry.json"), "original").unwrap();
+        let _held_lock = lock_unprepared(&legacy).unwrap();
+        assert!(matches!(
+            move_legacy_home(&legacy, &current),
+            Err(RegistryError::Locked)
+        ));
+        assert!(!current.exists());
+        assert_eq!(
+            fs::read_to_string(legacy.join("registry.json")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn atomic_migration_rename_cannot_replace_even_an_empty_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        fs::create_dir(&legacy).unwrap();
+        fs::create_dir(&current).unwrap();
+        fs::write(legacy.join("registry.json"), "original").unwrap();
+        assert!(rename_directory_no_replace(&legacy, &current).is_err());
+        assert!(legacy.join("registry.json").exists());
+        assert_eq!(fs::read_dir(current).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn namespace_migration_preserves_embedded_links_without_following_them() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        let external = dir.path().join("outside.json");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(&external, "outside unchanged").unwrap();
+        symlink(&external, legacy.join("linked.json")).unwrap();
+        move_legacy_home(&legacy, &current).unwrap();
+        assert!(fs::symlink_metadata(current.join("linked.json"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_link(current.join("linked.json")).unwrap(),
+            external
+        );
+        assert_eq!(fs::read_to_string(external).unwrap(), "outside unchanged");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn namespace_migration_refuses_a_link_as_the_legacy_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &legacy).unwrap();
+        assert!(move_legacy_home(&legacy, &current).is_err());
+        assert!(!current.exists());
+        assert!(fs::symlink_metadata(&legacy)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!lock_path(&outside).exists());
+    }
 
     #[test]
     fn reset_removes_owned_data_and_reports_filesystem_failures() {

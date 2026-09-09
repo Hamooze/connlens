@@ -273,6 +273,9 @@ fn configure_tray(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Migrate before Tauri, plugins, or WebKit can create the new app directory.
+    // On case-insensitive macOS volumes its bundle ID and ProjectDirs path alias.
+    registry::prepare_app_home().expect("could not prepare Nemu ConnLens app data");
     // A local tray utility does not need one async worker for every CPU core.
     // Keep the owner alive throughout Tauri's event loop, as required by set().
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -460,7 +463,7 @@ mod tests {
 
     #[test]
     fn fixture_single_instances_are_separate_from_the_installed_app() {
-        let identifier = "com.brdg.connlens";
+        let identifier = "com.nemu.connlens";
         let fixture_a = std::path::Path::new("/fixture/a");
         let fixture_b = std::path::Path::new("/fixture/b");
         assert_ne!(super::fixture_identifier(identifier, fixture_a), identifier);

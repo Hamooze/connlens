@@ -19,7 +19,7 @@ export const SettingsView = memo(function SettingsView({ settings }: { settings?
     </section>
     <details className="settings-card custom-provider"><summary><span>Custom providers<small>Add a local config or environment source.</small></span><ChevronRight size={16} /></summary><CustomProviderForm /></details>
     <section className="settings-card data-settings"><h3>Data</h3><button onClick={() => void reviewCleanup()}>Review cleanup<ChevronRight size={14} /></button>{!confirmReset ? <button onClick={() => setConfirmReset(true)}>Reset app data<ChevronRight size={14} /></button> : <div className="reset-confirm"><p>Clear ConnLens history, custom providers and settings? Your source account files stay unchanged.</p><button className="danger-action" onClick={() => { void resetAppData(); setConfirmReset(false); }}>Confirm reset</button><button onClick={() => setConfirmReset(false)}>Cancel</button></div>}</section>
-    <div className="privacy-note">Accounts stay on this device.<a href="https://nemu.ae" onClick={(event) => { event.preventDefault(); void api.openExternalUrl("https://nemu.ae").catch(() => useConnLensStore.getState().setToast("Could not open Nemu.")); }}>Made by Nemu</a></div>
+    <div className="privacy-note">Accounts stay on this device.<a href="https://nemu.ae" onClick={(event) => { event.preventDefault(); void api.openExternalUrl("https://nemu.ae").catch(() => useConnLensStore.getState().setToast("Could not open Nemu.")); }}>© 2026 Nemu</a></div>
   </section>;
 });
 function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
