@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -85,7 +85,9 @@ try {
   const ghFound = run(["list", "--json", "--all", "--provider", "github", "--rescan"]);
   const observed = ghFound.connections.find((row) => row.id === duplicateOriginal.id);
   assert.equal(observed?.meta.toolPresence?.status, "found", "Fixture gh executable was not observed");
-  assert.equal(realpathSync(observed.meta.toolPresence.path), realpathSync(ghExecutable), "Executable check escaped the fixture candidate");
+  const observedFile = statSync(observed.meta.toolPresence.path, { bigint: true });
+  const expectedFile = statSync(ghExecutable, { bigint: true });
+  assert.deepEqual([observedFile.dev, observedFile.ino], [expectedFile.dev, expectedFile.ino], "Executable check escaped the fixture candidate");
   assert.equal(observed.validation.availability, "available");
   rmSync(ghExecutable);
   const ghRemoved = run(["list", "--json", "--all", "--provider", "github", "--rescan"]);
