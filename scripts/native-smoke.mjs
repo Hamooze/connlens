@@ -85,7 +85,7 @@ try {
   const ghFound = run(["list", "--json", "--all", "--provider", "github", "--rescan"]);
   const observed = ghFound.connections.find((row) => row.id === duplicateOriginal.id);
   assert.equal(observed?.meta.toolPresence?.status, "found", "Fixture gh executable was not observed");
-  assert.equal(observed.meta.toolPresence.path, ghExecutable, "Executable check escaped the fixture candidate");
+  assert.equal(realpathSync(observed.meta.toolPresence.path), realpathSync(ghExecutable), "Executable check escaped the fixture candidate");
   assert.equal(observed.validation.availability, "available");
   rmSync(ghExecutable);
   const ghRemoved = run(["list", "--json", "--all", "--provider", "github", "--rescan"]);
