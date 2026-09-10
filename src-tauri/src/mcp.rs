@@ -417,7 +417,10 @@ fn registration(source: &Source, name: &str, value: &Value) -> Option<(DetectedC
         ("mcpDisabled".into(), Value::Bool(disabled)),
     ]);
     if let Some(command) = command {
-        meta.insert("mcpCommand".into(), Value::String(secutil::redact(command)));
+        meta.insert(
+            "mcpCommand".into(),
+            Value::String(crate::tool_presence::redact_command(command)),
+        );
     }
     Some((
         DetectedConnection {
@@ -494,6 +497,25 @@ mod tests {
                 meta: row.meta.clone(),
             })
             .collect()
+    }
+
+    #[test]
+    fn absolute_launcher_paths_keep_safe_components_and_mask_secret_components() {
+        let fixture = tempfile::tempdir().unwrap();
+        let source = Source {
+            path: fixture.path().join("mcp.json"),
+            client: "Cursor",
+            format: parsers::Format::Json,
+            map_key: "mcpServers",
+        };
+        let command =
+            "/var/folders/bl/vzjcvbz95c3dk19cb0fw46180000gn/T/.tmp0GH4ri/.cargo/bin/fixture-cli";
+        let (safe, _) = registration(&source, "safe", &json!({"command":command})).unwrap();
+        assert_eq!(safe.meta["mcpCommand"], command);
+        let secret = "ghp_abcdefghijklmnop";
+        let sensitive = format!("/fixture/{secret}/bin/helper");
+        let (masked, _) = registration(&source, "masked", &json!({"command":sensitive})).unwrap();
+        assert!(!serde_json::to_string(&masked).unwrap().contains(secret));
     }
 
     #[cfg(unix)]

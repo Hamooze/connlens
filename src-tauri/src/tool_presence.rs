@@ -21,6 +21,25 @@ pub struct ToolPresence {
     pub reason_code: String,
 }
 
+/// Preserve path separators while redacting each executable/path component.
+/// The general token redactor permits '/' inside base64-like values, which can
+/// otherwise combine ordinary directory names into a false secret match.
+pub fn redact_command(command: &str) -> String {
+    if command.len() > MAX_COMMAND_BYTES || command.chars().any(char::is_control) {
+        return "Invalid command".to_string();
+    }
+    let mut safe = String::with_capacity(command.len());
+    for part in command.split_inclusive(['/', '\\']) {
+        if let Some(component) = part.strip_suffix(['/', '\\']) {
+            safe.push_str(&redact(component));
+            safe.push_str(&part[component.len()..]);
+        } else {
+            safe.push_str(&redact(part));
+        }
+    }
+    safe
+}
+
 pub fn provider_command(provider: &str) -> Option<&'static str> {
     Some(match provider {
         "aws" => "aws",
@@ -48,11 +67,7 @@ pub fn check(
     paths: &ScanPaths,
     checked_at: &str,
 ) -> ToolPresence {
-    let name = if command.len() <= MAX_COMMAND_BYTES && !command.chars().any(char::is_control) {
-        redact(command)
-    } else {
-        "Invalid command".to_string()
-    };
+    let name = redact_command(command);
     let result = |status: &str, path: Option<&Path>, code: &str, reason: &str| ToolPresence {
         status: status.to_string(),
         name: name.clone(),
@@ -487,7 +502,7 @@ fn display_path(path: &Path) -> Option<String> {
     if raw.len() > MAX_COMMAND_BYTES {
         return None;
     }
-    let redacted = redact(raw);
+    let redacted = redact_command(raw);
     // A masked path must not later be treated as an exact absence baseline.
     (redacted == raw && !raw.chars().any(char::is_control)).then_some(redacted)
 }
@@ -537,7 +552,7 @@ mod tests {
         } else {
             name.to_string()
         };
-        let path = home.join(".local/bin").join(name);
+        let path = home.join(".local").join("bin").join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "fixture executable; must never run").unwrap();
         #[cfg(unix)]
@@ -584,7 +599,8 @@ mod tests {
         let first = check("fixture-cli", None, &paths, "1");
         let replacement = dir
             .path()
-            .join(".cargo/bin")
+            .join(".cargo")
+            .join("bin")
             .join(original.file_name().unwrap());
         fs::create_dir_all(replacement.parent().unwrap()).unwrap();
         fs::rename(original, &replacement).unwrap();
@@ -611,6 +627,57 @@ mod tests {
         ] {
             assert_eq!(check(command, None, &paths, "1").status, "unknown");
         }
+    }
+
+    #[test]
+    fn ordinary_macos_temporary_paths_remain_exact_removal_baselines() {
+        let path =
+            "/var/folders/bl/vzjcvbz95c3dk19cb0fw46180000gn/T/.tmp0GH4ri/.cargo/bin/fixture-cli";
+        assert_ne!(
+            redact(path),
+            path,
+            "The general redactor reproduces the original failure"
+        );
+        assert_eq!(redact_command(path), path);
+        assert_eq!(display_path(Path::new(path)).as_deref(), Some(path));
+        let windows = r"C:\Users\fixture\AppData\Local\Programs\Fixture\bin\fixture-cli.EXE";
+        assert_eq!(redact_command(windows), windows);
+        assert_eq!(display_path(Path::new(windows)).as_deref(), Some(windows));
+    }
+
+    #[test]
+    fn secret_components_stay_redacted_and_cannot_be_removal_baselines() {
+        for secret in ["ghp_abcdefghijklmnop".to_string(), "A".repeat(48)] {
+            for separator in ['/', '\\'] {
+                let path =
+                    format!("{separator}fixture{separator}{secret}{separator}bin{separator}cli");
+                let safe = redact_command(&path);
+                assert!(safe.contains("[redacted]"));
+                assert!(!safe.contains(&secret));
+                assert!(display_path(Path::new(&path)).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn absolute_command_names_preserve_the_same_safe_path_across_removal() {
+        let (dir, paths) = fixture();
+        let nested = dir
+            .path()
+            .join("var")
+            .join("folders")
+            .join("bl")
+            .join("vzjcvbz95c3dk19cb0fw46180000gn")
+            .join("T")
+            .join("fixture");
+        let executable = executable(&nested, "fixture-cli");
+        let command = executable.to_str().unwrap();
+        let first = check(command, None, &paths, "1");
+        assert_eq!(first.status, "found");
+        assert_eq!(first.name, command);
+        assert_eq!(first.path.as_deref(), Some(command));
+        fs::remove_file(&executable).unwrap();
+        assert_eq!(check(command, Some(&first), &paths, "2").status, "missing");
     }
 
     #[test]
