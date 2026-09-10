@@ -32,6 +32,18 @@ format = "json"
 strategy = "token_file"
 source_type = "config_file"
 
+[[locations]]
+path = "%XDG_CONFIG_HOME%/gcloud/configurations/config_*"
+format = "ini"
+strategy = "profile_file"
+source_type = "config_file"
+
+[[locations]]
+path = "%XDG_CONFIG_HOME%/gcloud/application_default_credentials.json"
+format = "json"
+strategy = "token_file"
+source_type = "config_file"
+
 [[env_vars]]
 name = "GOOGLE_APPLICATION_CREDENTIALS"
 label = "Google credentials file"

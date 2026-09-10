@@ -1,4 +1,3 @@
-use crate::descriptors;
 use crate::models::{ConnectionStatus, ErrorPayload, SnapshotConnection};
 use crate::registry;
 use crate::scan;
@@ -132,8 +131,8 @@ fn execute(cli: Cli) -> Result<(), (i32, String)> {
                     serde_json::to_string_pretty(&providers).map_err(|err| (2, err.to_string()))?
                 );
             } else {
-                for provider in descriptors::bundled_descriptors() {
-                    println!("{}\t{}", provider.id, provider.name);
+                for provider in providers {
+                    println!("{}\t{}", provider["id"], provider["name"]);
                 }
             }
         }

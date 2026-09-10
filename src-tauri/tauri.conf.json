@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ConnLens",
   "version": "0.1.0",
-  "identifier": "com.brdg.connlens",
+  "identifier": "com.nemu.connlens",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "popover",
@@ -19,6 +20,8 @@
         "visible": false,
         "resizable": false,
         "decorations": false,
+        "transparent": false,
+        "shadow": true,
         "skipTaskbar": true,
         "alwaysOnTop": true
       }
@@ -29,6 +32,9 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Nemu",
+    "copyright": "Copyright © 2026 Nemu",
+    "homepage": "https://nemu.ae",
     "targets": "all",
     "macOS": {
       "signingIdentity": "-"

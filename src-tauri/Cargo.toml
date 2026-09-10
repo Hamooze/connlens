@@ -1,8 +1,9 @@
 [package]
 name = "connlens"
 version = "0.1.0"
-description = "Local-only Windows tray utility for developer app connection visibility."
-authors = ["Hamza"]
+description = "Local-only macOS, Windows, and Linux tray utility for developer app connection visibility."
+authors = ["Nemu"]
+homepage = "https://nemu.ae"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -26,23 +27,31 @@ directories = "6.0.0"
 glob = "0.3"
 notify = "8.2"
 regex = "1.12"
-reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 rust-ini = "0.21.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9.34"
 sha2 = "0.10"
-tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri = { version = "2.11.5", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-single-instance = "2.4.3"
 thiserror = "2.0"
 toml = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 url = "2.5"
 
 [target.'cfg(windows)'.dependencies]
+windows-core = "=0.61.2"
 winreg = "0.56.0"
+windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+trash = "=5.2.6"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.23"

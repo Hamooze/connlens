@@ -2,7 +2,7 @@ use crate::credman::CredmanEntry;
 use crate::descriptors::{Descriptor, Location};
 use crate::models::{ConnectionSource, DetectedConnection, Identity, SourceType};
 use crate::scan::secutil;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -36,6 +36,17 @@ fn detected(
         fingerprint,
         meta,
     }
+}
+
+fn read_nearby_json(path: &Path, config_root: &Path) -> Option<Value> {
+    let root = config_root.canonicalize().ok()?;
+    let canonical = path.canonicalize().ok()?;
+    if !canonical.starts_with(root) {
+        return None;
+    }
+    super::parsers::parse(&canonical, super::parsers::Format::Json)
+        .ok()
+        .map(|doc| doc.value)
 }
 
 const ACCOUNT_LABEL_KEYS: &[&str] = &[
@@ -235,10 +246,6 @@ fn role_arn_label(value: &Value) -> Option<String> {
             Some(format!("{account_id}/{role_name}"))
         }
     })
-}
-
-fn object_value(map: &Map<String, Value>) -> Value {
-    Value::Object(map.clone())
 }
 
 fn insert_if_string(meta: &mut BTreeMap<String, Value>, key: &str, value: Option<String>) {
@@ -544,7 +551,7 @@ pub mod neon {
             meta.insert("confidence".to_string(), Value::String(confidence.clone()));
         }
 
-        let mut row = super::detected(
+        let row = super::detected(
             descriptor,
             label,
             descriptor.dashboard_url.clone(),
@@ -553,7 +560,6 @@ pub mod neon {
             Some(secutil::fingerprint(fingerprint.as_bytes())),
             meta,
         );
-        row.identity.is_active_identity = true;
         vec![row]
     }
 
@@ -595,9 +601,6 @@ pub mod neon {
                 }
             }
         }
-        if let Ok(profile) = std::env::var("USERPROFILE") {
-            candidates.push(PathBuf::from(profile).join(".config/neon/profiles.json"));
-        }
         dedupe_paths(candidates)
     }
 
@@ -614,11 +617,13 @@ pub mod neon {
         credentials_path: &Path,
         user_id: Option<&str>,
     ) -> Option<NeonProfile> {
-        let metadata = fs::metadata(profiles_path).ok()?;
-        if metadata.len() > 1_048_576 {
-            return None;
-        }
-        let value: Value = serde_json::from_str(&fs::read_to_string(profiles_path).ok()?).ok()?;
+        let parent = credentials_path.parent()?;
+        let root = if parent.file_name().and_then(|name| name.to_str()) == Some("neonctl") {
+            parent.parent()?
+        } else {
+            parent
+        };
+        let value = read_nearby_json(profiles_path, root)?;
         let profiles = value.get("profiles").and_then(Value::as_object)?;
         let mut matching_profile = NeonProfile::default();
         let mut label_for_user = None;
@@ -723,7 +728,7 @@ pub mod shopify {
 
                 let fingerprint =
                     secutil::fingerprint(format!("shopify-account:{user_id}:{label}").as_bytes());
-                let mut row = super::detected(
+                let row = super::detected(
                     descriptor,
                     label,
                     descriptor.dashboard_url.clone(),
@@ -732,7 +737,6 @@ pub mod shopify {
                     Some(fingerprint),
                     meta,
                 );
-                row.identity.is_active_identity = true;
                 Some(row)
             })
             .collect()
@@ -741,22 +745,13 @@ pub mod shopify {
 
 pub mod vercel {
     use super::*;
-    use std::fs;
-    use std::time::Duration;
-
-    #[derive(Default)]
-    struct VercelProfile {
-        label: Option<String>,
-        scope: Option<String>,
-        resolved_by_api: bool,
-    }
 
     pub fn auth_file(
         descriptor: &Descriptor,
         location: &Location,
         path: &Path,
         value: &Value,
-        probes_enabled: bool,
+        _probes_enabled: bool,
     ) -> Vec<DetectedConnection> {
         let Some(token) = vercel_token(value).filter(|token| !token.is_empty()) else {
             return Vec::new();
@@ -770,28 +765,17 @@ pub mod vercel {
             .and_then(|config| config.get("currentTeam"))
             .and_then(Value::as_str);
         let fingerprint = secutil::fingerprint(token.as_bytes());
-        let api_profile = if probes_enabled {
-            resolve_profile(token, current_team)
-        } else {
-            VercelProfile::default()
-        };
-        let label = api_profile
-            .label
-            .clone()
-            .or_else(|| primary_label(value))
+        let label = primary_label(value)
             .or_else(|| profile.clone())
             .unwrap_or_else(|| "Vercel account".to_string());
-        let scope = api_profile
-            .scope
-            .clone()
-            .or_else(|| {
-                profile.as_ref().map(|profile| {
-                    if *profile == label {
-                        "Vercel profile".to_string()
-                    } else {
-                        format!("profile: {profile}")
-                    }
-                })
+        let scope = profile
+            .as_ref()
+            .map(|profile| {
+                if *profile == label {
+                    "Vercel profile".to_string()
+                } else {
+                    format!("profile: {profile}")
+                }
             })
             .or_else(|| current_team.map(|_| "Team context".to_string()))
             .or_else(|| Some("Vercel account".to_string()));
@@ -813,12 +797,6 @@ pub mod vercel {
         }
         if let Some(expires_at) = value.get("expiresAt").and_then(Value::as_i64) {
             meta.insert("expiresAt".to_string(), json!(expires_at));
-        }
-        if api_profile.resolved_by_api {
-            meta.insert(
-                "resolvedBy".to_string(),
-                Value::String("vercel_api".to_string()),
-            );
         }
         if let Some(confidence) = &location.confidence {
             meta.insert("confidence".to_string(), Value::String(confidence.clone()));
@@ -867,69 +845,6 @@ pub mod vercel {
         )
     }
 
-    fn resolve_profile(token: &str, current_team: Option<&str>) -> VercelProfile {
-        let Ok(client) = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(4))
-            .user_agent("ConnLens/0.1 local-enrichment")
-            .build()
-        else {
-            return VercelProfile::default();
-        };
-
-        let label = get_json(&client, "https://api.vercel.com/v2/user", token)
-            .and_then(|value| value.get("user").cloned().or(Some(value)))
-            .and_then(|value| friendly_api_label(&value));
-        let scope = current_team.and_then(|team| resolve_team_label(&client, token, team));
-        VercelProfile {
-            resolved_by_api: label.is_some() || scope.is_some(),
-            label,
-            scope,
-        }
-    }
-
-    fn get_json(client: &reqwest::blocking::Client, url: &str, token: &str) -> Option<Value> {
-        let response = client.get(url).bearer_auth(token).send().ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        response.json::<Value>().ok()
-    }
-
-    fn resolve_team_label(
-        client: &reqwest::blocking::Client,
-        token: &str,
-        current_team: &str,
-    ) -> Option<String> {
-        let value = get_json(client, "https://api.vercel.com/v2/teams?limit=100", token)?;
-        let teams = value
-            .get("teams")
-            .and_then(Value::as_array)
-            .or_else(|| value.as_array())?;
-        teams
-            .iter()
-            .find(|team| {
-                team.get("id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| id == current_team)
-            })
-            .and_then(friendly_api_label)
-    }
-
-    fn friendly_api_label(value: &Value) -> Option<String> {
-        first_clean_string_for_keys(
-            "vercel",
-            value,
-            &[
-                "name",
-                "username",
-                "slug",
-                "email",
-                "displayName",
-                "display_name",
-            ],
-        )
-    }
-
     fn profile_alias(path: &Path) -> Option<String> {
         let profile = path.parent()?.file_name()?.to_str()?;
         match profile {
@@ -941,13 +856,7 @@ pub mod vercel {
 
     fn read_sibling_config(path: &Path) -> Option<Value> {
         let config_path = path.with_file_name("config.json");
-        let metadata = fs::metadata(&config_path).ok()?;
-        if metadata.len() > 1_048_576 {
-            return None;
-        }
-        fs::read_to_string(config_path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
+        read_nearby_json(&config_path, path.parent()?)
     }
 }
 
@@ -969,12 +878,14 @@ pub mod profiles {
             let Some(section_obj) = section_value.as_object() else {
                 continue;
             };
+            if section_obj.is_empty() {
+                continue;
+            }
             let profile = section
                 .strip_prefix("profile ")
                 .unwrap_or(section)
                 .to_string();
-            let section_value = object_value(section_obj);
-            let label = first_account_label(&section_value).unwrap_or_else(|| profile.clone());
+            let label = first_account_label(section_value).unwrap_or_else(|| profile.clone());
             let host = section_obj
                 .get("host")
                 .or_else(|| section_obj.get("endpoint_url"))
@@ -1001,9 +912,9 @@ pub mod profiles {
                     meta.insert((*key).to_string(), Value::String(value.to_string()));
                 }
             }
-            insert_if_string(&mut meta, "roleAccount", role_arn_label(&section_value));
+            insert_if_string(&mut meta, "roleAccount", role_arn_label(section_value));
             let scope = if label == profile {
-                first_scope(&section_value).or_else(|| location.scope.clone())
+                first_scope(section_value).or_else(|| location.scope.clone())
             } else {
                 Some(profile)
             };
@@ -1277,7 +1188,19 @@ pub mod envvars {
     use crate::descriptors::Descriptor;
 
     pub fn scan(descriptors: &[Descriptor]) -> Vec<DetectedConnection> {
-        let values = read_env_hives();
+        if std::env::var_os("CONNLENS_HOME").is_some() {
+            return Vec::new();
+        }
+        let names = descriptors
+            .iter()
+            .flat_map(|descriptor| {
+                descriptor
+                    .env_vars
+                    .iter()
+                    .map(|variable| variable.name.as_str())
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let values = read_env_hives(&names);
         scan_from_map(descriptors, &values)
     }
 
@@ -1310,7 +1233,14 @@ pub mod envvars {
                             descriptor_id: Some(descriptor.id.clone()),
                         },
                         fingerprint: Some(secutil::fingerprint(value.as_bytes())),
-                        meta: BTreeMap::from([("source".to_string(), json!("registry_env"))]),
+                        meta: BTreeMap::from([(
+                            "source".to_string(),
+                            json!(if cfg!(windows) {
+                                "registry_env"
+                            } else {
+                                "process_env"
+                            }),
+                        )]),
                     });
                 }
             }
@@ -1319,7 +1249,7 @@ pub mod envvars {
     }
 
     #[cfg(windows)]
-    fn read_env_hives() -> BTreeMap<String, String> {
+    fn read_env_hives(names: &std::collections::BTreeSet<&str>) -> BTreeMap<String, String> {
         use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
         use winreg::RegKey;
 
@@ -1332,13 +1262,9 @@ pub mod envvars {
             ),
         ] {
             if let Ok(key) = RegKey::predef(hive).open_subkey(subkey) {
-                for name in key
-                    .enum_values()
-                    .filter_map(Result::ok)
-                    .map(|(name, _)| name)
-                {
-                    if let Ok(value) = key.get_value::<String, _>(&name) {
-                        values.insert(name, value);
+                for name in names {
+                    if let Ok(value) = key.get_value::<String, _>(name) {
+                        values.insert((*name).to_string(), value);
                     }
                 }
             }
@@ -1347,8 +1273,15 @@ pub mod envvars {
     }
 
     #[cfg(not(windows))]
-    fn read_env_hives() -> BTreeMap<String, String> {
-        std::env::vars().collect()
+    fn read_env_hives(names: &std::collections::BTreeSet<&str>) -> BTreeMap<String, String> {
+        names
+            .iter()
+            .filter_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .map(|value| ((*name).to_string(), value))
+            })
+            .collect()
     }
 }
 
@@ -1442,7 +1375,7 @@ mod tests {
             rows[0].identity.host.as_deref(),
             Some("https://admin.shopify.com")
         );
-        assert!(rows[0].identity.is_active_identity);
+        assert!(!rows[0].identity.is_active_identity);
         assert!(rows[0]
             .meta
             .get("userIdFingerprint")

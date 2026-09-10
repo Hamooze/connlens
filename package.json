@@ -1,5 +1,10 @@
 {
   "name": "connlens",
+  "author": {
+    "name": "Nemu",
+    "url": "https://nemu.ae"
+  },
+  "homepage": "https://nemu.ae",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -13,7 +18,10 @@
     "tauri:build:windows": "tauri build --bundles nsis",
     "tauri:build:linux": "tauri build --bundles deb,appimage",
     "tauri:build:macos": "tauri build --bundles app,dmg",
-    "register:start-menu": "powershell -ExecutionPolicy Bypass -File scripts\\register_start_menu_shortcut.ps1"
+    "register:start-menu": "powershell -ExecutionPolicy Bypass -File scripts\\register_start_menu_shortcut.ps1",
+    "test:e2e": "playwright test",
+    "test:smoke": "node scripts/native-smoke.mjs",
+    "test:secrets": "node scripts/secret-grep.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

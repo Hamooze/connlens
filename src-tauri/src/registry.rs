@@ -1,7 +1,7 @@
 use crate::models::{
-    is_retired_provider_id, ChangeSet, Connection, ConnectionStatus, DetectedConnection,
-    ErrorPayload, Identity, RegisterEntry, RegistryFile, Settings, Snapshot, SnapshotConnection,
-    SourceType, WatcherHealth,
+    is_retired_provider_id, Availability, ChangeSet, Connection, ConnectionSource,
+    ConnectionStatus, ConnectionValidation, DetectedConnection, ErrorPayload, Identity,
+    RegisterEntry, RegistryFile, Settings, Snapshot, SnapshotConnection, SourceType, WatcherHealth,
 };
 use chrono::Utc;
 use serde_json::Value;
@@ -74,17 +74,180 @@ pub struct Registry {
 }
 
 pub fn app_home() -> PathBuf {
-    if let Ok(path) = std::env::var("CONNLENS_HOME") {
+    if let Some(path) = std::env::var_os("CONNLENS_HOME") {
         return PathBuf::from(path);
     }
 
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        return PathBuf::from(local).join("ConnLens");
+    default_home("nemu")
+}
+
+fn default_home(owner: &str) -> PathBuf {
+    if cfg!(windows) {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+            return PathBuf::from(local).join("ConnLens");
+        }
     }
 
-    directories::ProjectDirs::from("com", "brdg", "ConnLens")
+    directories::ProjectDirs::from("com", owner, "ConnLens")
         .map(|dirs| dirs.data_local_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".connlens"))
+}
+
+fn prepare_home(home: &Path) -> Result<(), RegistryError> {
+    // Explicit fixture homes never inspect or migrate the user's default data.
+    if std::env::var_os("CONNLENS_HOME").is_some() {
+        return Ok(());
+    }
+    prepare_home_at(home, &default_home("brdg"), &default_home("nemu"))
+}
+
+pub(crate) fn prepare_app_home() -> Result<(), RegistryError> {
+    prepare_home(&app_home())
+}
+
+fn prepare_home_at(home: &Path, legacy: &Path, current: &Path) -> Result<(), RegistryError> {
+    if home != current || legacy == current {
+        return Ok(());
+    }
+    move_legacy_home(legacy, current)
+}
+
+fn move_legacy_home(legacy: &Path, current: &Path) -> Result<(), RegistryError> {
+    // Never merge with or overwrite an existing Nemu namespace, including an
+    // empty directory or a symbolic link supplied by another process.
+    match fs::symlink_metadata(current) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    match fs::symlink_metadata(legacy) {
+        Ok(metadata) if metadata.is_dir() && !is_directory_link(&metadata) => {}
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Legacy ConnLens data is not a regular directory; it was left unchanged",
+            )
+            .into())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+
+    // Hold the existing registry lock during the move. Do not copy the tree:
+    // the atomic rename preserves every file and permission without following
+    // any links inside it, and a failed move leaves the old namespace intact.
+    let Some(mut guard) = lock_legacy_for_migration(legacy, current)? else {
+        return Ok(());
+    };
+    if let Some(parent) = current.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match rename_directory_no_replace(legacy, current) {
+        Ok(()) => {
+            guard.path = lock_path(current);
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn lock_legacy_for_migration(
+    legacy: &Path,
+    current: &Path,
+) -> Result<Option<RegistryLock>, RegistryError> {
+    let path = lock_path(legacy);
+    let start = Instant::now();
+    loop {
+        if fs::symlink_metadata(current).is_ok() {
+            return Ok(None);
+        }
+        // Unlike the normal registry lock, never create the legacy directory.
+        // Another new process may have just moved it into the Nemu namespace.
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                let _ = writeln!(file, "pid={}", std::process::id());
+                return Ok(Some(RegistryLock { path }));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if start.elapsed() >= Duration::from_secs(2) {
+                    return Err(RegistryError::Locked);
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && fs::symlink_metadata(current).is_ok() =>
+            {
+                return Ok(None)
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn is_directory_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+fn rename_directory_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let from = CString::new(from.as_os_str().as_bytes())?;
+        let to = CString::new(to.as_os_str().as_bytes())?;
+        #[cfg(target_os = "macos")]
+        let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows::{
+            core::HSTRING,
+            Win32::Storage::FileSystem::{MoveFileExW, MOVE_FILE_FLAGS},
+        };
+        // No REPLACE_EXISTING and no COPY_ALLOWED: fail safely if a rename is
+        // not available instead of overwriting or performing a partial copy.
+        unsafe {
+            MoveFileExW(
+                &HSTRING::from(from.as_os_str()),
+                &HSTRING::from(to.as_os_str()),
+                MOVE_FILE_FLAGS(0),
+            )
+        }
+        .map_err(|_| std::io::Error::last_os_error())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (from, to);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Atomic namespace migration is unavailable",
+        ))
+    }
 }
 
 pub fn now_iso() -> String {
@@ -106,100 +269,174 @@ pub fn short_hash(parts: &[&str]) -> String {
 }
 
 pub fn connection_id(detected: &DetectedConnection) -> String {
-    let host = detected.identity.host.as_deref().unwrap_or_default();
-    let source = detected.source.path.as_deref().unwrap_or_default();
-    short_hash(&[&detected.provider, &detected.identity.label, host, source])
+    record_id(
+        &detected.provider,
+        &detected.identity,
+        &detected.source,
+        &detected.meta,
+    )
+}
+
+fn mcp_registration_id(provider: &str, meta: &BTreeMap<String, Value>) -> Option<String> {
+    if provider != "mcp_servers" {
+        return None;
+    }
+    let digest = meta.get("mcpRegistrationId")?.as_str()?;
+    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| digest.to_ascii_lowercase())
+}
+
+fn record_id(
+    provider: &str,
+    identity: &Identity,
+    source: &ConnectionSource,
+    meta: &BTreeMap<String, Value>,
+) -> String {
+    if let Some(registration) = mcp_registration_id(provider, meta) {
+        return short_hash(&["mcp-registration", &registration]);
+    }
+    identity_source_id(provider, identity, source)
+}
+
+fn identity_source_id(provider: &str, identity: &Identity, source: &ConnectionSource) -> String {
+    short_hash(&[
+        provider,
+        &identity.label,
+        identity.host.as_deref().unwrap_or_default(),
+        source.path.as_deref().unwrap_or_default(),
+        identity.scope.as_deref().unwrap_or_default(),
+    ])
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RecordKey {
+    provider: String,
+    label: String,
+    host: Option<String>,
+    scope: Option<String>,
+    source_type: u8,
+    path: Option<String>,
+    descriptor_id: Option<String>,
+    separate_record: Option<String>,
+    registration: Option<String>,
+}
+
+fn record_key(
+    provider: &str,
+    identity: &Identity,
+    source: &ConnectionSource,
+    meta: &BTreeMap<String, Value>,
+    id: &str,
+) -> RecordKey {
+    let source_type = match source.source_type {
+        SourceType::ConfigFile => 0,
+        SourceType::CredentialManager => 1,
+        SourceType::EnvVar => 2,
+        SourceType::Cli => 3,
+        SourceType::AgentRegistered => 4,
+    };
+    // A label or token alone cannot establish identity. Keep the complete source,
+    // host and profile scope in the key, including the descriptor that read it.
+    // Without a source, and for manual entries, only identical stored IDs collapse.
+    let separate_record = (source.path.is_none()
+        || matches!(
+            source.source_type,
+            SourceType::Cli | SourceType::AgentRegistered
+        ))
+    .then(|| id.to_string());
+    let registration = mcp_registration_id(provider, meta);
+    RecordKey {
+        provider: provider.to_string(),
+        // MCP registration identity is source/client/server-key based, so editing
+        // its target URL must update that registration rather than add a copy.
+        label: if registration.is_some() {
+            String::new()
+        } else {
+            identity.label.clone()
+        },
+        host: if registration.is_some() {
+            None
+        } else {
+            identity.host.clone()
+        },
+        scope: if registration.is_some() {
+            None
+        } else {
+            identity.scope.clone()
+        },
+        source_type,
+        path: if registration.is_some() {
+            source.path.as_deref().map(|path| {
+                crate::descriptors::comparable_path(Path::new(path))
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        } else {
+            source.path.clone()
+        },
+        descriptor_id: source.descriptor_id.clone(),
+        separate_record,
+        registration,
+    }
+}
+
+fn merge_record_history(records: &[&Connection], preferred_id: Option<&str>) -> Connection {
+    let preferred = records
+        .iter()
+        .copied()
+        .max_by(|left, right| {
+            let priority = |connection: &Connection| {
+                preferred_id.map_or_else(
+                    || {
+                        connection.id
+                            == record_id(
+                                &connection.provider,
+                                &connection.identity,
+                                &connection.source,
+                                &connection.meta,
+                            )
+                    },
+                    |id| connection.id == id,
+                )
+            };
+            priority(left)
+                .cmp(&priority(right))
+                .then_with(|| left.last_seen.cmp(&right.last_seen))
+                .then_with(|| left.id.cmp(&right.id))
+        })
+        .expect("a reconciliation group is never empty");
+    let mut merged = preferred.clone();
+    let mut history = records.to_vec();
+    history.sort_by(|left, right| {
+        right
+            .last_seen
+            .cmp(&left.last_seen)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    for record in history {
+        merged.first_seen = merged.first_seen.min(record.first_seen.clone());
+        merged.last_seen = merged.last_seen.max(record.last_seen.clone());
+        merged.hidden |= record.hidden;
+        merged.seen &= record.seen;
+        for (key, value) in &record.meta {
+            merged
+                .meta
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+    if records
+        .iter()
+        .any(|record| record.status == ConnectionStatus::Changed && !record.seen)
+    {
+        merged.status = ConnectionStatus::Changed;
+        merged.seen = false;
+    }
+    merged
 }
 
 fn registry_path(home: &Path) -> PathBuf {
     home.join("registry.json")
-}
-
-fn is_ephemeral_project_link(connection: &Connection) -> bool {
-    connection
-        .meta
-        .get("kind")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| kind == "project_link")
-}
-
-fn is_superseded_fingerprint_fallback(
-    connection: &Connection,
-    seen_source_paths: &BTreeSet<(String, String)>,
-) -> bool {
-    let Some(path) = connection.source.path.as_ref() else {
-        return false;
-    };
-    let fallback_prefix = format!("{} (...", connection.provider_name);
-    connection.identity.label.starts_with(&fallback_prefix)
-        && connection.identity.label.ends_with(')')
-        && seen_source_paths.contains(&(connection.provider.clone(), path.clone()))
-}
-
-fn is_superseded_raw_identity(
-    connection: &Connection,
-    seen_source_paths: &BTreeSet<(String, String)>,
-) -> bool {
-    let Some(path) = connection.source.path.as_ref() else {
-        return false;
-    };
-
-    is_raw_identity_label(&connection.provider, &connection.identity.label)
-        && seen_source_paths.contains(&(connection.provider.clone(), path.clone()))
-}
-
-fn is_superseded_generic_identity(
-    connection: &Connection,
-    seen_friendly_source_paths: &BTreeSet<(String, String)>,
-    seen_friendly_providers: &BTreeSet<String>,
-) -> bool {
-    let Some(path) = connection.source.path.as_ref() else {
-        return false;
-    };
-
-    is_generic_identity_label(&connection.provider, &connection.identity.label)
-        && (seen_friendly_source_paths.contains(&(connection.provider.clone(), path.clone()))
-            || seen_friendly_providers.contains(&connection.provider))
-}
-
-fn is_friendly_identity_label(provider: &str, label: &str) -> bool {
-    !is_raw_identity_label(provider, label) && !is_generic_identity_label(provider, label)
-}
-
-fn is_generic_identity_label(provider: &str, label: &str) -> bool {
-    let label = label.trim();
-    matches!(
-        (provider, label),
-        ("azure", "AzureCloud")
-            | ("azure", "default")
-            | ("neon", "Neon account")
-            | ("vercel", "Vercel account")
-    )
-}
-
-fn is_raw_identity_label(provider: &str, label: &str) -> bool {
-    let label = label.trim();
-    match provider {
-        "neon" => is_uuid_like(label),
-        "vercel" => {
-            label.starts_with("team_")
-                || label.starts_with("usr_")
-                || (label.len() >= 20
-                    && label.len() <= 40
-                    && label.chars().all(|ch| ch.is_ascii_alphanumeric()))
-        }
-        _ => false,
-    }
-}
-
-fn is_uuid_like(value: &str) -> bool {
-    let parts = value.split('-').collect::<Vec<_>>();
-    let expected = [8, 4, 4, 4, 12];
-    parts.len() == expected.len()
-        && parts
-            .iter()
-            .zip(expected)
-            .all(|(part, len)| part.len() == len && part.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
 
 fn backup_path(home: &Path) -> PathBuf {
@@ -211,6 +448,11 @@ fn lock_path(home: &Path) -> PathBuf {
 }
 
 fn lock(home: &Path) -> Result<RegistryLock, RegistryError> {
+    prepare_home(home)?;
+    lock_unprepared(home)
+}
+
+fn lock_unprepared(home: &Path) -> Result<RegistryLock, RegistryError> {
     fs::create_dir_all(home)?;
     let path = lock_path(home);
     let start = Instant::now();
@@ -234,19 +476,33 @@ fn lock(home: &Path) -> Result<RegistryLock, RegistryError> {
 
 fn read_file(path: &Path) -> Result<RegistryFile, RegistryError> {
     let text = fs::read_to_string(path)?;
-    serde_json::from_str(&text).map_err(|err| RegistryError::Parse(err.to_string()))
+    let mut file: RegistryFile =
+        serde_json::from_str(&text).map_err(|err| RegistryError::Parse(err.to_string()))?;
+    file.settings.probes_enabled = false;
+    for connection in &mut file.connections {
+        if connection.validation.availability != Availability::Available {
+            connection.identity.is_active_identity = false;
+            connection.validation.usage = crate::models::Usage::Unknown;
+            if connection.validation.availability == Availability::Unknown {
+                connection.status = ConnectionStatus::Unverified;
+            }
+        }
+    }
+    Ok(file)
 }
 
 fn archive_corrupt(path: &Path) {
     if path.exists() {
-        let stamp = Utc::now().format("%Y%m%d%H%M%S");
-        let archive = path.with_file_name(format!("registry.corrupt-{stamp}.json"));
+        let stamp = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let archive = path.with_file_name(format!("{name}.corrupt-{stamp}"));
         let _ = fs::rename(path, archive);
     }
 }
 
 impl Registry {
     pub fn load(home: &Path) -> Result<Self, RegistryError> {
+        prepare_home(home)?;
         fs::create_dir_all(home)?;
         let primary = registry_path(home);
         let backup = backup_path(home);
@@ -279,8 +535,23 @@ impl Registry {
                         });
                     }
                 },
+                Err(RegistryError::Parse(_)) => {
+                    archive_corrupt(&primary);
+                    return Ok(Self {
+                        home: home.to_path_buf(),
+                        file: RegistryFile::default(),
+                        history_reset_notice: true,
+                    });
+                }
                 Err(err) => return Err(err),
             }
+        }
+        if backup.exists() {
+            return Ok(Self {
+                home: home.to_path_buf(),
+                file: read_file(&backup)?,
+                history_reset_notice: true,
+            });
         }
 
         Ok(Self {
@@ -292,6 +563,10 @@ impl Registry {
 
     pub fn save(&self) -> Result<(), RegistryError> {
         let _guard = lock(&self.home)?;
+        self.save_unlocked()
+    }
+
+    fn save_unlocked(&self) -> Result<(), RegistryError> {
         fs::create_dir_all(&self.home)?;
         let path = registry_path(&self.home);
         let backup = backup_path(&self.home);
@@ -303,28 +578,40 @@ impl Registry {
 
         let text = serde_json::to_string_pretty(&self.file)
             .map_err(|err| RegistryError::Parse(err.to_string()))?;
-        fs::write(&temp, text)?;
-        if path.exists() {
-            fs::remove_file(&path)?;
-        }
+        let mut file = fs::File::create(&temp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
         fs::rename(temp, path)?;
         Ok(())
     }
 
     pub fn diff(&mut self, detected: Vec<DetectedConnection>, scope: Option<&str>) -> ChangeSet {
+        self.diff_with_validation(detected, scope, &BTreeMap::new())
+    }
+
+    pub fn diff_with_validation(
+        &mut self,
+        detected: Vec<DetectedConnection>,
+        _scope: Option<&str>,
+        validations: &BTreeMap<String, ConnectionValidation>,
+    ) -> ChangeSet {
         let now = now_iso();
         let mut changes = ChangeSet::default();
-        let mut seen_ids = BTreeSet::new();
-        let mut seen_source_paths = BTreeSet::new();
-        let mut seen_friendly_source_paths = BTreeSet::new();
-        let mut seen_friendly_providers = BTreeSet::new();
-        let old_by_id = self
-            .file
-            .connections
-            .iter()
-            .cloned()
-            .map(|connection| (connection.id.clone(), connection))
-            .collect::<BTreeMap<_, _>>();
+        let mut seen_keys = BTreeSet::new();
+        let mut old_groups = BTreeMap::<RecordKey, Vec<&Connection>>::new();
+        for connection in &self.file.connections {
+            old_groups
+                .entry(record_key(
+                    &connection.provider,
+                    &connection.identity,
+                    &connection.source,
+                    &connection.meta,
+                    &connection.id,
+                ))
+                .or_default()
+                .push(connection);
+        }
         let mut next = Vec::new();
 
         for detected in detected {
@@ -333,40 +620,67 @@ impl Registry {
             }
 
             let id = connection_id(&detected);
-            seen_ids.insert(id.clone());
-            if let Some(path) = detected.source.path.as_deref() {
-                let source_key = (detected.provider.clone(), path.to_string());
-                seen_source_paths.insert(source_key.clone());
-                if is_friendly_identity_label(&detected.provider, &detected.identity.label) {
-                    seen_friendly_source_paths.insert(source_key);
-                    seen_friendly_providers.insert(detected.provider.clone());
-                }
+            let key = record_key(
+                &detected.provider,
+                &detected.identity,
+                &detected.source,
+                &detected.meta,
+                &id,
+            );
+            if !seen_keys.insert(key.clone()) {
+                continue;
             }
-
-            if let Some(existing) = old_by_id.get(&id) {
+            // Consume the entire identity/source group, even if its canonical ID
+            // already exists alongside IDs generated by an earlier app version.
+            if let Some(records) = old_groups.remove(&key) {
+                let existing = merge_record_history(&records, Some(&id));
                 let mut updated = existing.clone();
+                updated.id = id.clone();
                 let fingerprint_changed = existing.fingerprint != detected.fingerprint
                     && existing.fingerprint.is_some()
                     && detected.fingerprint.is_some();
+                updated.validation =
+                    ConnectionValidation::available(&now, detected.identity.is_active_identity);
                 updated.provider_name = detected.provider_name;
                 updated.identity = detected.identity;
                 updated.source = detected.source;
-                updated.meta = detected.meta;
-                updated.last_seen = if existing.first_seen > now {
-                    existing.first_seen.clone()
-                } else {
-                    now.clone()
-                };
+                if detected.provider == "mcp_servers" {
+                    // Optional scanner fields disappear when a registration
+                    // changes transport. Keep user metadata, but never revive an
+                    // old command or executable check on an HTTP registration.
+                    updated.meta.retain(|key, _| {
+                        !matches!(
+                            key.as_str(),
+                            "mcpRegistrationId"
+                                | "mcpClient"
+                                | "mcpServerName"
+                                | "mcpTransport"
+                                | "mcpDisabled"
+                                | "mcpCommand"
+                                | "toolPresence"
+                        )
+                    });
+                }
+                updated.meta.extend(detected.meta);
+                updated.last_seen = existing
+                    .last_seen
+                    .clone()
+                    .max(existing.first_seen.clone())
+                    .max(now.clone());
                 updated.fingerprint = detected.fingerprint;
                 updated.status = if fingerprint_changed {
                     updated.seen = false;
                     changes.changed.push(id.clone());
+                    ConnectionStatus::Changed
+                } else if existing.status == ConnectionStatus::Changed && !existing.seen {
                     ConnectionStatus::Changed
                 } else {
                     ConnectionStatus::Active
                 };
                 next.push(updated);
             } else {
+                let validation =
+                    ConnectionValidation::available(&now, detected.identity.is_active_identity);
                 let connection = Connection {
                     id: id.clone(),
                     provider: detected.provider,
@@ -374,6 +688,7 @@ impl Registry {
                     identity: detected.identity,
                     source: detected.source,
                     status: ConnectionStatus::Active,
+                    validation,
                     fingerprint: detected.fingerprint,
                     first_seen: now.clone(),
                     last_seen: now.clone(),
@@ -386,36 +701,45 @@ impl Registry {
             }
         }
 
-        for existing in &self.file.connections {
+        for records in old_groups.into_values() {
+            let existing = merge_record_history(&records, None);
             if is_retired_provider_id(&existing.provider) {
                 continue;
             }
-
-            let in_scope = scope
-                .map(|provider| existing.provider == provider)
-                .unwrap_or(true);
-            if !seen_ids.contains(&existing.id) && in_scope {
-                if is_ephemeral_project_link(existing)
-                    || is_superseded_fingerprint_fallback(existing, &seen_source_paths)
-                    || is_superseded_raw_identity(existing, &seen_source_paths)
-                    || is_superseded_generic_identity(
-                        existing,
-                        &seen_friendly_source_paths,
-                        &seen_friendly_providers,
-                    )
+            let mut updated = existing.clone();
+            let unknown = || {
+                ConnectionValidation::unknown(
+                    "not_checked",
+                    "This source was not validated in the current scan.",
+                    Some(now.clone()),
+                )
+            };
+            // All copies must have absence evidence before the merged history is
+            // Missing. An unchecked legacy alias must not authorize removal.
+            let checks = records
+                .iter()
+                .map(|record| validations.get(&record.id).cloned().unwrap_or_else(unknown))
+                .collect::<Vec<_>>();
+            updated.validation = checks
+                .iter()
+                .find(|check| check.availability != Availability::Missing)
+                .or_else(|| checks.first())
+                .cloned()
+                .unwrap_or_else(unknown);
+            updated.identity.is_active_identity = false;
+            if updated.validation.availability == Availability::Missing {
+                if records
+                    .iter()
+                    .any(|record| record.validation.availability != Availability::Missing)
                 {
-                    continue;
+                    changes.missing.push(updated.id.clone());
+                    updated.seen = false;
                 }
-                let mut missing = existing.clone();
-                if missing.status != ConnectionStatus::Missing {
-                    changes.missing.push(missing.id.clone());
-                }
-                missing.status = ConnectionStatus::Missing;
-                missing.seen = false;
-                next.push(missing);
-            } else if !seen_ids.contains(&existing.id) {
-                next.push(existing.clone());
+                updated.status = ConnectionStatus::Missing;
+            } else {
+                updated.status = ConnectionStatus::Unverified;
             }
+            next.push(updated);
         }
 
         next.sort_by(|a, b| {
@@ -456,7 +780,11 @@ impl Registry {
             connections,
             settings: self.file.settings.clone(),
             last_scan: self.file.last_scan.clone(),
-            provider_errors,
+            provider_errors: if provider_errors.is_empty() {
+                self.file.provider_errors.clone()
+            } else {
+                provider_errors
+            },
             watcher_health,
             history_reset_notice: self.history_reset_notice
                 && !self.file.settings.history_reset_notice_dismissed,
@@ -481,7 +809,7 @@ impl Registry {
         let before = self.file.connections.len();
         self.file
             .connections
-            .retain(|connection| connection.status != ConnectionStatus::Missing);
+            .retain(|connection| connection.validation.availability != Availability::Missing);
         before - self.file.connections.len()
     }
 
@@ -526,7 +854,14 @@ impl Registry {
             .find(|connection| connection.id == id)
         {
             existing.last_seen = now;
+            existing.identity = detected.identity;
+            existing.meta = detected.meta;
             existing.status = ConnectionStatus::Unverified;
+            existing.validation = ConnectionValidation::unknown(
+                "manual_record",
+                "This is a manually registered entry; local availability and use are not verified.",
+                Some(existing.last_seen.clone()),
+            );
             existing.seen = false;
             return Ok(id);
         }
@@ -538,6 +873,11 @@ impl Registry {
             identity: detected.identity,
             source: detected.source,
             status: ConnectionStatus::Unverified,
+            validation: ConnectionValidation::unknown(
+                "manual_record",
+                "This is a manually registered entry; local availability and use are not verified.",
+                Some(now.clone()),
+            ),
             fingerprint: None,
             first_seen: now.clone(),
             last_seen: now,
@@ -589,26 +929,35 @@ pub fn validate_register_entry(entry: &RegisterEntry) -> Result<(), RegistryErro
     Ok(())
 }
 
-pub fn with_registry<T>(mut f: impl FnMut(&mut Registry) -> T) -> Result<T, RegistryError> {
-    let home = app_home();
-    let mut registry = Registry::load(&home)?;
+pub fn with_registry<T>(f: impl FnOnce(&mut Registry) -> T) -> Result<T, RegistryError> {
+    with_registry_at(&app_home(), f)
+}
+
+pub fn with_registry_at<T>(
+    home: &Path,
+    f: impl FnOnce(&mut Registry) -> T,
+) -> Result<T, RegistryError> {
+    // Hold one lock across the complete transaction, including scan and UI updates.
+    let _guard = lock(home)?;
+    let mut registry = Registry::load(home)?;
+    let previous = registry.file.clone();
     let result = f(&mut registry);
-    registry.save()?;
+    if registry.file != previous || !registry_path(home).exists() {
+        registry.save_unlocked()?;
+    }
     Ok(result)
 }
 
 pub fn load_snapshot() -> Result<Snapshot, RegistryError> {
     let home = app_home();
     let registry = Registry::load(&home)?;
-    let health = if registry.file.settings.watchers_enabled {
-        WatcherHealth::Ok
-    } else {
-        WatcherHealth::Paused
-    };
+    let health = crate::watchers::health(registry.file.settings.watchers_enabled);
     Ok(registry.snapshot(Vec::new(), health))
 }
 
-pub fn update_settings(patch: Settings) -> Result<Settings, RegistryError> {
+pub fn update_settings(mut patch: Settings) -> Result<Settings, RegistryError> {
+    patch.probes_enabled = false;
+    patch.poll_minutes = patch.poll_minutes.clamp(1, 1440);
     with_registry(|registry| {
         registry.file.settings = patch.clone();
         registry.file.settings.clone()
@@ -616,23 +965,36 @@ pub fn update_settings(patch: Settings) -> Result<Settings, RegistryError> {
 }
 
 pub fn set_autostart_setting(enabled: bool) -> Result<(), RegistryError> {
-    let home = app_home();
-    let mut registry = Registry::load(&home)?;
-    if registry.file.settings.autostart == enabled {
-        return Ok(());
-    }
-    registry.file.settings.autostart = enabled;
-    registry.save()
+    with_registry(|registry| registry.file.settings.autostart = enabled)
 }
 
 pub fn reset_app_data() -> Result<(), RegistryError> {
-    let home = app_home();
-    if home.exists() {
-        let _guard = lock(&home)?;
-        let _ = fs::remove_file(registry_path(&home));
-        let _ = fs::remove_file(backup_path(&home));
-        let _ = fs::remove_dir_all(home.join("inbox"));
-        let _ = fs::remove_dir_all(home.join("providers"));
+    reset_app_data_at(&app_home())
+}
+
+fn reset_app_data_at(home: &Path) -> Result<(), RegistryError> {
+    if !home.exists() {
+        return Ok(());
+    }
+    let _guard = lock(home)?;
+    // Return filesystem failures to the UI instead of reporting a partial reset as success.
+    for directory in [home.join("inbox"), home.join("providers")] {
+        if let Err(error) = fs::remove_dir_all(directory) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.into());
+            }
+        }
+    }
+    for path in [
+        backup_path(home),
+        home.join("registry.json.tmp"),
+        registry_path(home),
+    ] {
+        if let Err(error) = fs::remove_file(path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.into());
+            }
+        }
     }
     Ok(())
 }
@@ -641,6 +1003,322 @@ pub fn reset_app_data() -> Result<(), RegistryError> {
 mod tests {
     use super::*;
     use crate::models::{ConnectionSource, SourceType};
+
+    #[test]
+    fn namespace_migration_preserves_the_complete_app_data_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy-owner");
+        let current = dir.path().join("nemu");
+        with_registry_at(&legacy, |registry| {
+            registry.file.settings.theme = "light".to_string();
+            registry.file.settings.watchers_enabled = false;
+        })
+        .unwrap();
+        fs::create_dir_all(legacy.join("providers/nested")).unwrap();
+        fs::create_dir_all(legacy.join("inbox")).unwrap();
+        fs::write(
+            legacy.join("providers/nested/custom.toml"),
+            "fixture provider",
+        )
+        .unwrap();
+        fs::write(legacy.join("inbox/entry.json"), "fixture registration").unwrap();
+        fs::write(legacy.join("registry.json.corrupt-fixture"), [0, 1, 2, 255]).unwrap();
+        let original_registry = fs::read(registry_path(&legacy)).unwrap();
+
+        prepare_home_at(&current, &legacy, &current).unwrap();
+
+        assert!(!legacy.exists());
+        assert_eq!(
+            fs::read(registry_path(&current)).unwrap(),
+            original_registry
+        );
+        assert_eq!(
+            fs::read_to_string(current.join("providers/nested/custom.toml")).unwrap(),
+            "fixture provider"
+        );
+        assert_eq!(
+            fs::read_to_string(current.join("inbox/entry.json")).unwrap(),
+            "fixture registration"
+        );
+        assert_eq!(
+            fs::read(current.join("registry.json.corrupt-fixture")).unwrap(),
+            [0, 1, 2, 255]
+        );
+        assert!(!lock_path(&current).exists());
+        let registry = Registry::load(&current).unwrap();
+        assert_eq!(registry.file.settings.theme, "light");
+        assert!(!registry.file.settings.watchers_enabled);
+        prepare_home_at(&current, &legacy, &current).unwrap();
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn namespace_migration_never_merges_or_overwrites_existing_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        fs::create_dir(&legacy).unwrap();
+        fs::create_dir(&current).unwrap();
+        fs::write(legacy.join("registry.json"), "legacy data").unwrap();
+        fs::write(current.join("registry.json"), "Nemu data").unwrap();
+        move_legacy_home(&legacy, &current).unwrap();
+        assert_eq!(
+            fs::read_to_string(legacy.join("registry.json")).unwrap(),
+            "legacy data"
+        );
+        assert_eq!(
+            fs::read_to_string(current.join("registry.json")).unwrap(),
+            "Nemu data"
+        );
+        assert!(!lock_path(&legacy).exists());
+    }
+
+    #[test]
+    fn explicit_fixture_home_does_not_migrate_default_namespaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        let fixture = dir.path().join("isolated");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("registry.json"), "original").unwrap();
+        prepare_home_at(&fixture, &legacy, &current).unwrap();
+        assert!(!current.exists());
+        assert!(!fixture.exists());
+        assert_eq!(
+            fs::read_to_string(legacy.join("registry.json")).unwrap(),
+            "original"
+        );
+        // Linux and the normal Windows storage override do not change path.
+        prepare_home_at(&legacy, &legacy, &legacy).unwrap();
+        assert_eq!(
+            fs::read_to_string(legacy.join("registry.json")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn simultaneous_namespace_migrations_preserve_data_without_recreating_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("registry.json"), "original").unwrap();
+        let held_lock = lock_unprepared(&legacy).unwrap();
+        let barrier = std::sync::Barrier::new(3);
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                barrier.wait();
+                move_legacy_home(&legacy, &current)
+            });
+            let second = scope.spawn(|| {
+                barrier.wait();
+                move_legacy_home(&legacy, &current)
+            });
+            barrier.wait();
+            // Both starters must wait for the existing transaction to release.
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(!current.exists());
+            drop(held_lock);
+            first.join().unwrap().unwrap();
+            second.join().unwrap().unwrap();
+        });
+        assert!(!legacy.exists());
+        assert!(!lock_path(&current).exists());
+        assert_eq!(
+            fs::read_to_string(current.join("registry.json")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn busy_legacy_namespace_does_not_create_an_empty_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("registry.json"), "original").unwrap();
+        let _held_lock = lock_unprepared(&legacy).unwrap();
+        assert!(matches!(
+            move_legacy_home(&legacy, &current),
+            Err(RegistryError::Locked)
+        ));
+        assert!(!current.exists());
+        assert_eq!(
+            fs::read_to_string(legacy.join("registry.json")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn atomic_migration_rename_cannot_replace_even_an_empty_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        fs::create_dir(&legacy).unwrap();
+        fs::create_dir(&current).unwrap();
+        fs::write(legacy.join("registry.json"), "original").unwrap();
+        assert!(rename_directory_no_replace(&legacy, &current).is_err());
+        assert!(legacy.join("registry.json").exists());
+        assert_eq!(fs::read_dir(current).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn namespace_migration_preserves_embedded_links_without_following_them() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        let external = dir.path().join("outside.json");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(&external, "outside unchanged").unwrap();
+        symlink(&external, legacy.join("linked.json")).unwrap();
+        move_legacy_home(&legacy, &current).unwrap();
+        assert!(fs::symlink_metadata(current.join("linked.json"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_link(current.join("linked.json")).unwrap(),
+            external
+        );
+        assert_eq!(fs::read_to_string(external).unwrap(), "outside unchanged");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn namespace_migration_refuses_a_link_as_the_legacy_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        let current = dir.path().join("nemu");
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &legacy).unwrap();
+        assert!(move_legacy_home(&legacy, &current).is_err());
+        assert!(!current.exists());
+        assert!(fs::symlink_metadata(&legacy)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!lock_path(&outside).exists());
+    }
+
+    #[test]
+    fn reset_removes_owned_data_and_reports_filesystem_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        with_registry_at(home, |registry| {
+            registry.file.settings.theme = "light".into()
+        })
+        .unwrap();
+        with_registry_at(home, |registry| {
+            registry.file.settings.theme = "dark".into()
+        })
+        .unwrap();
+        fs::write(
+            home.join("providers"),
+            "a file cannot be removed as a provider directory",
+        )
+        .unwrap();
+        assert!(reset_app_data_at(home).is_err());
+        assert!(registry_path(home).exists());
+        assert!(!lock_path(home).exists());
+        fs::remove_file(home.join("providers")).unwrap();
+        fs::create_dir(home.join("providers")).unwrap();
+        fs::write(home.join("providers/fixture.toml"), "fixture descriptor").unwrap();
+        reset_app_data_at(home).unwrap();
+        assert!(!registry_path(home).exists());
+        assert!(!backup_path(home).exists());
+        assert!(!home.join("providers").exists());
+        assert!(!lock_path(home).exists());
+        assert!(Registry::load(home).unwrap().file.connections.is_empty());
+    }
+
+    #[test]
+    fn parallel_transactions_preserve_both_settings_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::thread::scope(|scope| {
+            for provider in ["github", "aws"] {
+                let home = dir.path();
+                scope.spawn(move || {
+                    with_registry_at(home, |registry| {
+                        std::thread::sleep(Duration::from_millis(10));
+                        registry
+                            .file
+                            .settings
+                            .provider_toggles
+                            .insert(provider.to_string(), false);
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        let registry = Registry::load(dir.path()).unwrap();
+        assert_eq!(registry.file.settings.provider_toggles.len(), 2);
+    }
+
+    #[test]
+    fn profiles_with_same_account_and_path_keep_distinct_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let mut first = detected("same-account", "account-host", "config", None);
+        first.identity.scope = Some("development".to_string());
+        let mut second = first.clone();
+        second.identity.scope = Some("production".to_string());
+        registry.diff(vec![first.clone(), first, second], None);
+        assert_eq!(registry.file.connections.len(), 2);
+        assert_ne!(
+            registry.file.connections[0].id,
+            registry.file.connections[1].id
+        );
+    }
+
+    #[test]
+    fn manually_registered_connections_survive_scans_and_update_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let entry = RegisterEntry {
+            provider: "fixture".into(),
+            label: "Manual account".into(),
+            host: None,
+            scope: None,
+            note: Some("First note".into()),
+            meta: BTreeMap::new(),
+        };
+        let id = registry.register_entry(entry.clone()).unwrap();
+        registry.diff(Vec::new(), None);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Unverified
+        );
+        let mut updated = entry;
+        updated.note = Some("Updated note".into());
+        assert_eq!(registry.register_entry(updated).unwrap(), id);
+        assert_eq!(
+            registry.file.connections[0]
+                .meta
+                .get("note")
+                .and_then(Value::as_str),
+            Some("Updated note")
+        );
+    }
+
+    #[test]
+    fn missing_primary_recovers_backup_and_legacy_probes_stay_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = RegistryFile::default();
+        file.settings.probes_enabled = true;
+        file.settings.theme = "light".into();
+        fs::write(
+            backup_path(dir.path()),
+            serde_json::to_string(&file).unwrap(),
+        )
+        .unwrap();
+        let recovered = Registry::load(dir.path()).unwrap();
+        assert!(recovered.history_reset_notice);
+        assert_eq!(recovered.file.settings.theme, "light");
+        assert!(!recovered.file.settings.probes_enabled);
+    }
 
     fn detected(
         label: &str,
@@ -664,6 +1342,279 @@ mod tests {
             },
             fingerprint: fingerprint.map(str::to_string),
             meta: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn canonical_scan_consumes_all_legacy_copies_and_preserves_user_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let current = detected("alice", "github.com", "fixture/hosts.yml", None);
+        registry.diff(vec![current.clone()], None);
+        let canonical_id = connection_id(&current);
+        registry.file.connections[0].first_seen = "2026-09-09T00:00:00.000Z".into();
+        registry.file.connections[0]
+            .meta
+            .insert("currentFact".into(), Value::String("current".into()));
+        let mut legacy = registry.file.connections[0].clone();
+        legacy.id = "legacy-id-before-scope".into();
+        legacy.first_seen = "2026-01-01T00:00:00.000Z".into();
+        legacy.hidden = true;
+        legacy.seen = false;
+        legacy.validation = ConnectionValidation::default();
+        legacy.meta.insert(
+            "note".into(),
+            Value::String("Keep this account hidden".into()),
+        );
+        registry.file.connections.push(legacy.clone());
+        registry.file.connections.push(legacy);
+        let changes = registry.diff(vec![current.clone()], None);
+        assert!(changes.created.is_empty());
+        assert!(changes.missing.is_empty());
+        assert_eq!(registry.file.connections.len(), 1);
+        let merged = &registry.file.connections[0];
+        assert_eq!(merged.id, canonical_id);
+        assert_eq!(merged.first_seen, "2026-01-01T00:00:00.000Z");
+        assert!(merged.hidden);
+        assert!(!merged.seen);
+        assert_eq!(merged.meta["note"], "Keep this account hidden");
+        assert_eq!(merged.meta["currentFact"], "current");
+        assert_eq!(merged.validation.availability, Availability::Available);
+        registry.save().unwrap();
+        let mut restored = Registry::load(dir.path()).unwrap();
+        restored.diff(vec![current], None);
+        assert_eq!(restored.file.connections.len(), 1);
+        assert!(restored.file.connections[0].hidden);
+    }
+
+    #[test]
+    fn unseen_duplicate_ids_collapse_without_merging_different_accounts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        registry.diff(
+            vec![
+                detected("old-label", "service.test", "fixture/auth.json", None),
+                detected("generic-label", "service.test", "fixture/auth.json", None),
+            ],
+            None,
+        );
+        let original = registry.file.connections.clone();
+        registry.file.connections.extend(original);
+        registry.file.connections[2].hidden = true;
+        registry.file.connections[2].first_seen = "2026-01-01T00:00:00.000Z".into();
+        registry.diff(Vec::new(), None);
+        assert_eq!(registry.file.connections.len(), 2);
+        assert_ne!(
+            registry.file.connections[0].id,
+            registry.file.connections[1].id
+        );
+        assert!(registry
+            .file
+            .connections
+            .iter()
+            .all(|row| row.validation.availability == Availability::Unknown));
+        assert!(registry
+            .file
+            .connections
+            .iter()
+            .any(|row| row.hidden && row.first_seen == "2026-01-01T00:00:00.000Z"));
+        assert_eq!(registry.purge_missing(), 0);
+    }
+
+    #[test]
+    fn reconciliation_retains_profiles_hosts_sources_and_manual_record_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let base = detected(
+            "same-account",
+            "service.test",
+            "fixture/config",
+            Some("sha256:shared"),
+        );
+        let mut scoped = base.clone();
+        scoped.identity.scope = Some("other-profile".into());
+        let mut other_source = base.clone();
+        other_source.source.path = Some("fixture/other-config".into());
+        let mut other_host = base.clone();
+        other_host.identity.host = Some("another.test".into());
+        let input = vec![base, scoped, other_source, other_host];
+        registry.diff(input.clone(), None);
+        for mut row in registry.file.connections.clone() {
+            row.id = format!("legacy-{}", row.id);
+            registry.file.connections.push(row);
+        }
+        registry.diff(input, None);
+        assert_eq!(registry.file.connections.len(), 4);
+        let mut manual = registry.file.connections[0].clone();
+        manual.source.source_type = SourceType::AgentRegistered;
+        manual.id = "manual-one".into();
+        let mut second_manual = manual.clone();
+        second_manual.id = "manual-two".into();
+        registry.file.connections.extend([manual, second_manual]);
+        registry.diff(Vec::new(), None);
+        assert_eq!(
+            registry
+                .file
+                .connections
+                .iter()
+                .filter(|row| row.source.source_type == SourceType::AgentRegistered)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn reconciliation_preserves_token_rotation_and_unacknowledged_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let mut current = detected(
+            "alice",
+            "github.com",
+            "fixture/hosts.yml",
+            Some("sha256:old"),
+        );
+        registry.diff(vec![current.clone()], None);
+        registry.mark_all_seen();
+        let mut legacy = registry.file.connections[0].clone();
+        legacy.id = "legacy-rotation".into();
+        registry.file.connections.push(legacy);
+        current.fingerprint = Some("sha256:new".into());
+        let changes = registry.diff(vec![current.clone()], None);
+        assert_eq!(changes.changed.len(), 1);
+        assert!(changes.created.is_empty());
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Changed
+        );
+        registry.diff(vec![current.clone()], None);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Changed
+        );
+        registry.mark_all_seen();
+        registry.diff(vec![current], None);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Active
+        );
+    }
+
+    #[test]
+    fn reconciled_history_requires_absence_proof_for_every_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        registry.diff(
+            vec![detected("alice", "github.com", "fixture/hosts.yml", None)],
+            None,
+        );
+        let canonical = registry.file.connections[0].id.clone();
+        let mut alias = registry.file.connections[0].clone();
+        alias.id = "legacy-unchecked".into();
+        registry.file.connections.push(alias);
+        let missing = ConnectionValidation::missing(
+            &now_iso(),
+            "source_missing",
+            "Fixture source was absent.",
+        );
+        let proofs = BTreeMap::from([(canonical.clone(), missing.clone())]);
+        registry.diff_with_validation(Vec::new(), None, &proofs);
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections[0].id, canonical);
+        assert_eq!(
+            registry.file.connections[0].validation.availability,
+            Availability::Unknown
+        );
+        assert!(!registry.file.connections[0].removable());
+        registry.diff_with_validation(Vec::new(), None, &BTreeMap::from([(canonical, missing)]));
+        assert_eq!(
+            registry.file.connections[0].validation.availability,
+            Availability::Missing
+        );
+        assert_eq!(registry.purge_missing(), 1);
+    }
+
+    #[test]
+    fn mcp_registration_digest_keeps_one_record_when_target_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let mut first = detected(
+            "fixture-server",
+            "https://first.test",
+            "fixture/mcp.json",
+            Some("sha256:first"),
+        );
+        first.provider = "mcp_servers".into();
+        first.source.descriptor_id = Some("mcp_servers".into());
+        first
+            .meta
+            .insert("mcpRegistrationId".into(), Value::String("a1".repeat(32)));
+        first.meta.insert(
+            "mcpCommand".into(),
+            Value::String("fixture-launcher".into()),
+        );
+        let id = connection_id(&first);
+        registry.diff(vec![first.clone()], None);
+        registry.file.connections[0].hidden = true;
+        registry.file.connections[0].meta.insert(
+            "toolPresence".into(),
+            serde_json::json!({"status": "found"}),
+        );
+        registry.file.connections[0]
+            .meta
+            .insert("note".into(), Value::String("User note".into()));
+        let first_seen = registry.file.connections[0].first_seen.clone();
+        let mut changed = first.clone();
+        changed.identity.host = Some("https://second.test".into());
+        changed.meta.remove("mcpCommand");
+        changed.fingerprint = Some("sha256:second".into());
+        assert_eq!(connection_id(&changed), id);
+        registry.diff(vec![changed], None);
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections[0].id, id);
+        assert!(!registry.file.connections[0].meta.contains_key("mcpCommand"));
+        assert!(!registry.file.connections[0]
+            .meta
+            .contains_key("toolPresence"));
+        assert_eq!(registry.file.connections[0].meta["note"], "User note");
+        assert_eq!(
+            registry.file.connections[0].identity.host.as_deref(),
+            Some("https://second.test")
+        );
+        assert_eq!(registry.file.connections[0].first_seen, first_seen);
+        assert!(registry.file.connections[0].hidden);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Changed
+        );
+        let mut another = first;
+        another
+            .meta
+            .insert("mcpRegistrationId".into(), Value::String("b2".repeat(32)));
+        assert_ne!(connection_id(&another), id);
+        registry.diff(vec![another], None);
+        assert_eq!(registry.file.connections.len(), 2);
+    }
+
+    #[test]
+    fn mcp_registration_id_rejects_invalid_digest_and_ignores_other_providers() {
+        let mut row = detected("fixture-server", "service.test", "fixture/mcp.json", None);
+        let ordinary = connection_id(&row);
+        row.meta
+            .insert("mcpRegistrationId".into(), Value::String("ab".repeat(32)));
+        assert_eq!(connection_id(&row), ordinary);
+        row.provider = "mcp_servers".into();
+        let valid = connection_id(&row);
+        row.meta
+            .insert("mcpRegistrationId".into(), Value::String("AB".repeat(32)));
+        assert_eq!(connection_id(&row), valid);
+        for invalid in ["ab".repeat(31), "g".repeat(64), "a".repeat(65)] {
+            row.meta
+                .insert("mcpRegistrationId".into(), Value::String(invalid));
+            assert_eq!(
+                connection_id(&row),
+                identity_source_id(&row.provider, &row.identity, &row.source)
+            );
         }
     }
 
@@ -708,7 +1659,16 @@ mod tests {
             )],
             None,
         );
-        registry.diff(Vec::new(), Some("github"));
+        let id = registry.file.connections[0].id.clone();
+        let proof = BTreeMap::from([(
+            id,
+            ConnectionValidation::missing(
+                &now_iso(),
+                "source_missing",
+                "Fixture source was checked and is absent.",
+            ),
+        )]);
+        registry.diff_with_validation(Vec::new(), Some("github"), &proof);
         assert_eq!(
             registry.file.connections[0].status,
             ConnectionStatus::Missing
@@ -718,7 +1678,7 @@ mod tests {
     }
 
     #[test]
-    fn project_link_rows_are_pruned_when_missing() {
+    fn project_link_history_is_retained_without_source_evidence() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let mut project = detected(
@@ -739,11 +1699,16 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 1);
 
         registry.diff(Vec::new(), Some("vercel"));
-        assert!(registry.file.connections.is_empty());
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(
+            registry.file.connections[0].validation.availability,
+            Availability::Unknown
+        );
+        assert!(!registry.file.connections[0].removable());
     }
 
     #[test]
-    fn fingerprint_fallback_rows_are_pruned_when_source_has_active_identity() {
+    fn fingerprint_fallback_history_is_retained_when_identity_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let source = "C:/Users/dev/.config/neonctl/credentials.json";
@@ -768,12 +1733,16 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 1);
 
         registry.diff(vec![user], Some("neon"));
-        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections.len(), 2);
         assert_eq!(registry.file.connections[0].identity.label, "usr_fixture_1");
+        assert_eq!(
+            registry.file.connections[1].validation.availability,
+            Availability::Unknown
+        );
     }
 
     #[test]
-    fn raw_identity_rows_are_pruned_when_source_has_clean_label() {
+    fn raw_identity_history_is_retained_when_label_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let source = "C:/Users/dev/.config/neonctl/credentials.json";
@@ -798,12 +1767,16 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 1);
 
         registry.diff(vec![clean], Some("neon"));
-        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections.len(), 2);
         assert_eq!(registry.file.connections[0].identity.label, "Neon account");
+        assert_eq!(
+            registry.file.connections[1].validation.availability,
+            Availability::Unknown
+        );
     }
 
     #[test]
-    fn generic_identity_rows_are_pruned_when_source_has_clean_label() {
+    fn generic_identity_history_is_retained_when_label_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let source = "C:/Users/dev/.config/neonctl/credentials.json";
@@ -828,7 +1801,7 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 1);
 
         registry.diff(vec![clean], Some("neon"));
-        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections.len(), 2);
         assert_eq!(
             registry.file.connections[0].identity.label,
             "neon.profile@example.test"
@@ -836,7 +1809,7 @@ mod tests {
     }
 
     #[test]
-    fn azure_generic_config_rows_are_pruned_when_profile_account_exists() {
+    fn azure_config_history_is_retained_when_profile_account_appears() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let config_source = "C:/Users/dev/.azure/config";
@@ -867,7 +1840,7 @@ mod tests {
         assert_eq!(registry.file.connections.len(), 2);
 
         registry.diff(vec![account], Some("azure"));
-        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections.len(), 3);
         assert_eq!(
             registry.file.connections[0].identity.label,
             "azure.user@example.test"
@@ -892,6 +1865,34 @@ mod tests {
         let recovered = Registry::load(dir.path()).unwrap();
         assert!(recovered.history_reset_notice);
         assert_eq!(recovered.file.connections.len(), 1);
+    }
+
+    #[test]
+    fn legacy_missing_status_without_validation_never_authorizes_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        registry.diff(
+            vec![detected("legacy", "github.com", "hosts.yml", None)],
+            None,
+        );
+        let mut json = serde_json::to_value(&registry.file).unwrap();
+        let row = &mut json["connections"][0];
+        row.as_object_mut().unwrap().remove("validation");
+        row["status"] = serde_json::json!("missing");
+        row["identity"]["isActiveIdentity"] = serde_json::json!(true);
+        fs::write(
+            dir.path().join("registry.json"),
+            serde_json::to_vec(&json).unwrap(),
+        )
+        .unwrap();
+        let mut restored = Registry::load(dir.path()).unwrap();
+        let row = &restored.file.connections[0];
+        assert_eq!(row.validation.availability, Availability::Unknown);
+        assert_eq!(row.validation.usage, crate::models::Usage::Unknown);
+        assert!(row.validation.checked_at.is_none());
+        assert!(!row.identity.is_active_identity);
+        assert!(!row.removable());
+        assert_eq!(restored.purge_missing(), 0);
     }
 
     #[test]
@@ -921,6 +1922,7 @@ mod tests {
             identity: row.identity,
             source: row.source,
             status: ConnectionStatus::Active,
+            validation: ConnectionValidation::default(),
             fingerprint: None,
             first_seen: "2026-08-06T00:00:00.000Z".to_string(),
             last_seen: "2026-08-06T00:00:00.000Z".to_string(),

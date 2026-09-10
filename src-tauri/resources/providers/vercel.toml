@@ -82,6 +82,18 @@ strategy = "vercel_project"
 source_type = "config_file"
 confidence = "project_link"
 
+[[locations]]
+path = "%XDG_DATA_HOME%/com.vercel.cli/auth.json"
+format = "json"
+strategy = "vercel_auth"
+source_type = "config_file"
+
+[[locations]]
+path = "%XDG_CONFIG_HOME%/com.vercel.cli/auth.json"
+format = "json"
+strategy = "vercel_auth"
+source_type = "config_file"
+
 [[env_vars]]
 name = "VERCEL_TOKEN"
 label = "Vercel token"

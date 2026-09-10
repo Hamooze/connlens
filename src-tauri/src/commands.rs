@@ -1,3 +1,4 @@
+use crate::cleanup::{self, CleanupRequest, CleanupResult, CleanupReview, CleanupState};
 use crate::descriptors;
 use crate::models::{is_retired_provider_id, ErrorPayload, Settings, Snapshot};
 use crate::registry;
@@ -6,8 +7,9 @@ use crate::scan::parsers::Format;
 use arboard::Clipboard;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 pub type CommandResult<T> = Result<T, ErrorPayload>;
@@ -69,16 +71,61 @@ pub fn rescan_internal(
 }
 
 #[tauri::command]
+pub async fn review_cleanup(app: AppHandle) -> CommandResult<CleanupReview> {
+    let worker = app.clone();
+    let review = tauri::async_runtime::spawn_blocking(move || {
+        cleanup::review(worker.state::<CleanupState>().inner())
+    })
+    .await
+    .map_err(|_| ErrorPayload::new("cleanup_failed", "Local validation could not complete."))??;
+    emit_snapshot(Some(&app), &review.snapshot);
+    Ok(review)
+}
+
+#[tauri::command]
+pub async fn execute_cleanup(
+    app: AppHandle,
+    request: CleanupRequest,
+) -> CommandResult<CleanupResult> {
+    let worker = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        cleanup::execute(worker.state::<CleanupState>().inner(), request)
+    })
+    .await
+    .map_err(|_| {
+        ErrorPayload::new(
+            "cleanup_failed",
+            "Cleanup could not complete. Review local sources again.",
+        )
+    })??;
+    emit_snapshot(Some(&app), &result.snapshot);
+    Ok(result)
+}
+
+// Older clients can only remove history. They must pass the same fresh source
+// validation as the review flow; persisted Missing status alone is insufficient.
+#[tauri::command]
 pub fn remove(id: String) -> CommandResult<Snapshot> {
-    registry::with_registry(|registry| registry.remove(&id))
-        .map_err(ErrorPayload::from)?
-        .map_err(ErrorPayload::from)?;
-    snapshot_with_autostart(None)
+    registry::with_registry(|registry| {
+        let snapshot = scan::refresh_registry(registry, None, &descriptors::ScanPaths::current());
+        registry.remove(&id).map(|_| {
+            registry.snapshot(
+                registry.file.provider_errors.clone(),
+                snapshot.watcher_health,
+            )
+        })
+    })
+    .map_err(ErrorPayload::from)?
+    .map_err(ErrorPayload::from)
 }
 
 #[tauri::command]
 pub fn purge_missing() -> CommandResult<usize> {
-    registry::with_registry(|registry| registry.purge_missing()).map_err(ErrorPayload::from)
+    registry::with_registry(|registry| {
+        scan::refresh_registry(registry, None, &descriptors::ScanPaths::current());
+        registry.purge_missing()
+    })
+    .map_err(ErrorPayload::from)
 }
 
 #[tauri::command]
@@ -148,7 +195,13 @@ pub fn add_custom_provider(input: CustomProviderInput) -> CommandResult<Snapshot
             err.to_string(),
         )
     })?;
-    let providers_dir = registry::app_home().join("providers");
+    save_custom_descriptor(&registry::app_home(), &id, &text)?;
+
+    scan::scan_and_persist(Some(id))
+}
+
+fn save_custom_descriptor(home: &Path, id: &str, text: &str) -> CommandResult<()> {
+    let providers_dir = home.join("providers");
     fs::create_dir_all(&providers_dir).map_err(|err| {
         ErrorPayload::with_detail(
             "io_error",
@@ -156,15 +209,34 @@ pub fn add_custom_provider(input: CustomProviderInput) -> CommandResult<Snapshot
             err.to_string(),
         )
     })?;
-    fs::write(providers_dir.join(format!("{id}.toml")), text).map_err(|err| {
-        ErrorPayload::with_detail(
-            "io_error",
-            "Custom provider could not be saved",
-            err.to_string(),
-        )
-    })?;
-
-    scan::scan_and_persist(Some(id))
+    let path = providers_dir.join(format!("{id}.toml"));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                ErrorPayload::new(
+                    "provider_exists",
+                    "A custom provider with this ID already exists. Choose another ID.",
+                )
+            } else {
+                ErrorPayload::with_detail(
+                    "io_error",
+                    "Custom provider could not be saved",
+                    err.to_string(),
+                )
+            }
+        })?;
+    file.write_all(text.as_bytes())
+        .and_then(|_| file.sync_all())
+        .map_err(|err| {
+            ErrorPayload::with_detail(
+                "io_error",
+                "Custom provider could not be saved",
+                err.to_string(),
+            )
+        })
 }
 
 #[tauri::command]
@@ -261,10 +333,10 @@ pub fn reveal_source(id: String) -> CommandResult<String> {
     if !source.exists() {
         return Err(ErrorPayload::new("path_missing", "File no longer exists"));
     }
-    tauri_plugin_opener::open_path(&source, None::<&str>).map_err(|err| {
+    tauri_plugin_opener::reveal_item_in_dir(&source).map_err(|err| {
         ErrorPayload::with_detail(
             "open_failed",
-            "Source file could not be opened",
+            "Source file could not be revealed",
             err.to_string(),
         )
     })?;
@@ -313,7 +385,12 @@ fn snapshot_with_autostart(app: Option<&AppHandle>) -> CommandResult<Snapshot> {
     registry::load_snapshot().map_err(ErrorPayload::from)
 }
 
-fn read_autostart(app: &AppHandle) -> CommandResult<bool> {
+pub(crate) fn read_autostart(app: &AppHandle) -> CommandResult<bool> {
+    if descriptors::ScanPaths::current().is_isolated() {
+        return registry::Registry::load(&registry::app_home())
+            .map(|registry| registry.file.settings.autostart)
+            .map_err(ErrorPayload::from);
+    }
     app.autolaunch().is_enabled().map_err(|err| {
         ErrorPayload::with_detail(
             "autostart_error",
@@ -324,6 +401,9 @@ fn read_autostart(app: &AppHandle) -> CommandResult<bool> {
 }
 
 fn apply_autostart(app: &AppHandle, enabled: bool) -> CommandResult<()> {
+    if descriptors::ScanPaths::current().is_isolated() {
+        return Ok(());
+    }
     let manager = app.autolaunch();
     let current = manager.is_enabled().map_err(|err| {
         ErrorPayload::with_detail(
@@ -356,7 +436,7 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> CommandResult<()> {
 
 fn emit_snapshot(app: Option<&AppHandle>, snapshot: &Snapshot) {
     if let Some(app) = app {
-        let _ = app.emit("state://updated", snapshot);
+        crate::emit_visible_snapshot(app, snapshot);
     }
 }
 
@@ -480,6 +560,19 @@ fn normalize_env_vars(env_vars: Vec<String>) -> CommandResult<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adding_a_custom_provider_cannot_overwrite_an_existing_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        save_custom_descriptor(dir.path(), "fixture", "original descriptor").unwrap();
+        let error =
+            save_custom_descriptor(dir.path(), "fixture", "replacement descriptor").unwrap_err();
+        assert_eq!(error.code, "provider_exists");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("providers/fixture.toml")).unwrap(),
+            "original descriptor"
+        );
+    }
 
     #[test]
     fn provider_id_is_normalized_from_name() {

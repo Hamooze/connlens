@@ -9,6 +9,7 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
   test: {
+    include: ["src/**/*.test.{ts,tsx}"],
     environment: "jsdom",
     globals: true,
     setupFiles: "./src/test/setup.ts",
@@ -32,7 +33,7 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/.local/**"],
     },
   },
 }));
