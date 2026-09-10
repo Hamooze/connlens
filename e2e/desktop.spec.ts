@@ -136,6 +136,70 @@ test.afterEach(async ({}, testInfo) => {
   expect((testInfo as any).appErrors ?? []).toEqual([]);
 });
 
+test("CLI removal stays separate from account availability and protected cleanup", async ({ page }, testInfo) => {
+  await page.evaluate(() => {
+    const fixture = (window as any).__CONNLENS_TEST__;
+    const next = fixture.state();
+    next.connections[0].meta.toolPresence = { status: "missing", name: "gh", path: "/fixtures/bin/gh",
+      checkedAt: "2026-09-10T10:00:00.000Z", reasonCode: "observed_executable_missing",
+      reason: "The previously found executable is absent. Account configuration is checked separately." };
+    fixture.emit(next);
+  });
+  await expect(page.getByText(/^CLI removed/)).toBeVisible();
+  await expect(page.getByText("Config reference remains", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /dev@fixture.test.*Available/ }).click();
+  await expect(page.getByText("Available locally", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Review removal", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Select dev@fixture.test", exact: true })).toBeDisabled();
+  await expect(page.getByText("gh · CLI removed", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("tool-removal-review.png") });
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await page.evaluate(() => {
+    const fixture = (window as any).__CONNLENS_TEST__;
+    const next = fixture.state();
+    next.connections[0].meta.toolPresence.status = "found";
+    fixture.emit(next);
+  });
+  await expect(page.getByText(/^CLI removed/)).toBeHidden();
+  await expect(page.getByRole("button", { name: /dev@fixture.test.*Available/ })).toHaveCount(1);
+});
+
+test("removed MCP registrations can be reviewed and forgotten", async ({ page }, testInfo) => {
+  await page.evaluate(() => {
+    const fixture = (window as any).__CONNLENS_TEST__;
+    const next = fixture.state();
+    const server = structuredClone(next.connections[0]);
+    server.id = "mcp-fixture";
+    server.provider = "mcp_servers";
+    server.providerName = "MCP servers";
+    server.identity = { label: "Local helper", host: null, scope: "Codex", isActiveIdentity: false };
+    server.source = { sourceType: "config_file", path: "/fixtures/.codex/config.toml", descriptorId: "mcp_servers" };
+    server.meta = { mcpClient: "Codex", mcpTransport: "stdio", mcpCommand: "npx" };
+    next.connections.push(server);
+    fixture.emit(next);
+  });
+  await page.getByRole("button", { name: /Local helper.*Registered/ }).click();
+  await expect(page.getByRole("button", { name: "Open dashboard", exact: true })).toBeDisabled();
+  await page.evaluate(() => {
+    const fixture = (window as any).__CONNLENS_TEST__;
+    const next = fixture.state();
+    const server = next.connections.find((row: any) => row.id === "mcp-fixture");
+    server.status = "missing";
+    server.validation = { availability: "missing", usage: "unknown", checkedAt: "2026-09-10T10:01:00.000Z",
+      reason: "The MCP registration was removed from its configuration.", reasonCode: "mcp_registration_missing" };
+    fixture.emit(next);
+  });
+  await expect(page.getByRole("button", { name: /Local helper.*Removed/ })).toBeVisible();
+  await page.getByRole("button", { name: "Review removal", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Select Local helper", exact: true })).toBeChecked();
+  await page.screenshot({ path: testInfo.outputPath("mcp-removal-review.png") });
+  await page.getByRole("button", { name: "Remove selected", exact: true }).click();
+  await expect(page.getByText("1 entry removed", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await expect(page.getByText("Local helper", { exact: true })).toBeHidden();
+  await expect(page.getByText("dev@fixture.test", { exact: true })).toBeVisible();
+});
+
 test("provider filters and search retain the compact panel layout", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: "GitHub connections", exact: true }).click();
   await expect(page.getByText("dev@fixture.test", { exact: true })).toBeVisible();

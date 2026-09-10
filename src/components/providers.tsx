@@ -22,6 +22,7 @@ interface ProviderVisual {
 }
 
 const providerVisuals: Record<string, ProviderVisual> = {
+  mcp_servers: { name: "MCP servers", color: "#c0bdff", monogram: "MCP" },
   github: { name: "GitHub", color: "#f5f5f5", icon: siGithub },
   gitlab: { name: "GitLab", color: "#fc6d26", icon: siGitlab },
   aws: { name: "AWS", color: "#ff9900", monogram: "AWS" },
@@ -55,6 +56,7 @@ export const popularProviderIds = [
   "supabase",
   "shopify",
   "sentry",
+  "mcp_servers",
 ];
 
 export function ProviderLogo({ provider }: { provider: string }) {

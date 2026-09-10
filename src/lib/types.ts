@@ -3,6 +3,15 @@ export type WatcherHealth = "ok" | "degraded" | "paused";
 export type ViewName = "list" | "settings" | "cleanup";
 export type Availability = "available" | "missing" | "unknown";
 
+export interface ToolPresence {
+  status: "found" | "missing" | "not_found" | "unknown";
+  name: string;
+  path: string | null;
+  checkedAt: string;
+  reason: string;
+  reasonCode: string;
+}
+
 export interface ConnectionValidation {
   availability: Availability;
   usage: "selected" | "referenced" | "unknown";

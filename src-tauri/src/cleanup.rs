@@ -1054,6 +1054,51 @@ source_type = "config_file"
     }
 
     #[test]
+    fn removed_mcp_history_can_be_cleaned_while_shared_config_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = ScanPaths::isolated(dir.path());
+        let state = CleanupState::default();
+        let source = dir.path().join(".cursor/mcp.json");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, r#"{"mcpServers":{"removed":{"command":"fixture-helper"},"kept":{"url":"https://fixture.invalid/mcp"}}}"#).unwrap();
+        with_registry_at(dir.path(), |registry| {
+            scan::refresh_registry(registry, None, &paths);
+        })
+        .unwrap();
+        let remaining = r#"{"mcpServers":{"kept":{"url":"https://fixture.invalid/mcp"}}}"#;
+        fs::write(&source, remaining).unwrap();
+        let review = review_at(&state, dir.path(), &paths).unwrap();
+        let removable: Vec<_> = review
+            .entries
+            .iter()
+            .filter(|entry| entry.eligible)
+            .collect();
+        assert_eq!(removable.len(), 1);
+        assert_eq!(removable[0].label, "removed");
+        assert_eq!(review.files.len(), 1);
+        assert!(!review.files[0].eligible);
+        let result = execute_at(
+            &state,
+            dir.path(),
+            &paths,
+            CleanupRequest {
+                review_id: review.review_id,
+                connection_ids: vec![removable[0].id.clone()],
+                file_ids: vec![],
+            },
+            |_| panic!("Shared MCP config must not be trashed"),
+        )
+        .unwrap();
+        assert_eq!(result.removed_ids.len(), 1);
+        assert_eq!(result.snapshot.connections.len(), 1);
+        assert_eq!(
+            result.snapshot.connections[0].connection.identity.label,
+            "kept"
+        );
+        assert_eq!(fs::read_to_string(source).unwrap(), remaining);
+    }
+
+    #[test]
     fn history_only_cleanup_preserves_the_source_file() {
         let fixture = Fixture::new();
         let review = fixture.review();

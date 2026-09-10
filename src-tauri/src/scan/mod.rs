@@ -71,13 +71,43 @@ pub(crate) fn refresh_registry(
         detected.extend(strategies::envvars::scan(&descriptors));
     }
     let checked_at = now_iso();
+    let mcp_enabled = provider.as_deref().is_none_or(|id| id == "mcp_servers")
+        && settings.provider_toggles.get("mcp_servers").copied() != Some(false);
+    let mcp_scan = mcp_enabled.then(|| {
+        crate::mcp::scan(
+            paths,
+            &settings.project_roots,
+            &registry.file.connections,
+            &checked_at,
+        )
+    });
+    if let Some(result) = &mcp_scan {
+        detected.extend(result.detected.clone());
+        errors.extend(result.errors.clone());
+    }
+    let previous_tools = registry
+        .file
+        .connections
+        .iter()
+        .filter_map(|row| {
+            row.meta.get("toolPresence").cloned().and_then(|value| {
+                serde_json::from_value::<crate::tool_presence::ToolPresence>(value).ok()
+            })
+        })
+        .fold(BTreeMap::new(), |mut previous, tool| {
+            let existing = previous.get(&tool.name);
+            if existing.is_none() || matches!(tool.status.as_str(), "found" | "missing") {
+                previous.insert(tool.name.clone(), tool);
+            }
+            previous
+        });
     // Present references receive positive validation in diff_with_validation.
     // Reserve the historical-source checks for entries absent from this scan.
     let detected_ids: BTreeSet<_> = detected
         .iter()
         .map(crate::registry::connection_id)
         .collect();
-    let validations = registry
+    let mut validations: BTreeMap<String, ConnectionValidation> = registry
         .file
         .connections
         .iter()
@@ -99,7 +129,55 @@ pub(crate) fn refresh_registry(
             )
         })
         .collect();
+    if let Some(result) = &mcp_scan {
+        validations.extend(result.validations.clone());
+    }
     registry.diff_with_validation(detected, provider.as_deref(), &validations);
+    if let Some(result) = &mcp_scan {
+        for connection in &mut registry.file.connections {
+            if connection.provider == "mcp_servers" {
+                if let Some(validation) = result.validations.get(&connection.id) {
+                    connection.validation = validation.clone();
+                }
+            }
+        }
+    }
+    // One filesystem check per distinct launcher per scan. An account reference
+    // remains separate from executable presence; this never authorizes deletion.
+    let mut tools = BTreeMap::new();
+    for connection in &mut registry.file.connections {
+        if provider
+            .as_deref()
+            .is_some_and(|id| id != connection.provider)
+            || settings.provider_toggles.get(&connection.provider).copied() == Some(false)
+        {
+            continue;
+        }
+        let command = if connection.provider == "mcp_servers" {
+            connection
+                .meta
+                .get("mcpCommand")
+                .and_then(|value| value.as_str())
+        } else {
+            crate::tool_presence::provider_command(&connection.provider)
+        }
+        .map(str::to_string);
+        if let Some(command) = command {
+            let presence = tools.entry(command.clone()).or_insert_with(|| {
+                crate::tool_presence::check(
+                    &command,
+                    previous_tools.get(&command),
+                    paths,
+                    &checked_at,
+                )
+            });
+            if let Ok(value) = serde_json::to_value(presence) {
+                connection.meta.insert("toolPresence".into(), value);
+            }
+        } else {
+            connection.meta.remove("toolPresence");
+        }
+    }
     registry.file.provider_errors = errors.clone();
     registry.snapshot(errors, crate::watchers::health(settings.watchers_enabled))
 }
@@ -364,6 +442,8 @@ fn watch_roots_with_paths(home: &Path, paths: &ScanPaths) -> Vec<PathBuf> {
 
 fn watch_plan_with_paths(home: &Path, paths: &ScanPaths, settings: &Settings) -> WatchPlan {
     let mut patterns = BTreeSet::new();
+    let mut tool_patterns = BTreeSet::new();
+    let mut tool_commands = BTreeSet::new();
     for relative in ["providers/*.toml", "inbox/*"] {
         if let Some(pattern) = paths.expand_pattern(&home.join(relative).display().to_string()) {
             patterns.insert(pattern);
@@ -373,6 +453,9 @@ fn watch_plan_with_paths(home: &Path, paths: &ScanPaths, settings: &Settings) ->
         for descriptor in descriptors::load_all_scoped(home, paths).0 {
             if settings.provider_toggles.get(&descriptor.id).copied() == Some(false) {
                 continue;
+            }
+            if let Some(command) = crate::tool_presence::provider_command(&descriptor.id) {
+                tool_commands.insert(command.to_string());
             }
             for location in descriptor.locations {
                 for pattern in location_patterns(&location, &settings.project_roots) {
@@ -401,6 +484,43 @@ fn watch_plan_with_paths(home: &Path, paths: &ScanPaths, settings: &Settings) ->
                 }
             }
         }
+        if settings.provider_toggles.get("mcp_servers").copied() != Some(false) {
+            patterns.extend(crate::mcp::watch_patterns(paths, &settings.project_roots));
+        }
+        // Only inspect saved executable metadata when rebuilding the watch
+        // plan, never on unrelated filesystem events.
+        if let Ok(registry) = Registry::load(home) {
+            for connection in registry.file.connections {
+                if settings.provider_toggles.get(&connection.provider).copied() == Some(false) {
+                    continue;
+                }
+                if connection.provider == "mcp_servers" {
+                    if let Some(command) = connection
+                        .meta
+                        .get("mcpCommand")
+                        .and_then(|value| value.as_str())
+                    {
+                        tool_commands.insert(command.to_string());
+                    }
+                }
+                if let Some(path) = connection
+                    .meta
+                    .get("toolPresence")
+                    .and_then(|value| value.get("path"))
+                    .and_then(|value| value.as_str())
+                {
+                    let path = PathBuf::from(path);
+                    if path.is_absolute() && paths.allows(&path) {
+                        tool_patterns.insert(path);
+                    }
+                }
+            }
+        }
+        // Shared launchers (for example npx across several servers) need only
+        // one bounded candidate check per watch-plan rebuild.
+        for command in tool_commands {
+            tool_patterns.extend(crate::tool_presence::watch_candidates(&command, paths));
+        }
     }
     let mut candidates = vec![home.to_path_buf()];
     for pattern in &patterns {
@@ -428,7 +548,7 @@ fn watch_plan_with_paths(home: &Path, paths: &ScanPaths, settings: &Settings) ->
         candidates.push(fixed);
         candidates.extend(paths.expand(&pattern.display().to_string()));
     }
-    let roots = candidates
+    let mut roots = candidates
         .into_iter()
         .filter_map(|candidate| {
             candidate
@@ -436,13 +556,42 @@ fn watch_plan_with_paths(home: &Path, paths: &ScanPaths, settings: &Settings) ->
                 .find(|path| path.is_dir() && paths.allows(path))
                 .map(Path::to_path_buf)
         })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
+        .collect::<BTreeSet<_>>();
+    let user_home = paths.expand_pattern("%HOME%");
+    roots.extend(
+        tool_patterns
+            .iter()
+            .filter(|path| paths.allows(path))
+            .filter_map(|path| executable_watch_root(path, user_home.as_deref()))
+            .filter(|path| paths.allows(path)),
+    );
+    patterns.extend(tool_patterns);
     WatchPlan {
-        roots,
+        roots: roots.into_iter().collect(),
         patterns: patterns.into_iter().collect(),
     }
+}
+
+fn executable_watch_root(candidate: &Path, user_home: Option<&Path>) -> Option<PathBuf> {
+    let parent = candidate.parent()?;
+    // FSEvents filters NonRecursive registrations after receiving descendant
+    // events. Never promote an optional system bin tree to '/' or a broad
+    // system ancestor merely because the bin directory does not exist yet.
+    if parent.parent().is_none() {
+        return None;
+    }
+    if parent.is_dir() {
+        return Some(parent.to_path_buf());
+    }
+    let home = user_home.filter(|home| home.parent().is_some() && parent.starts_with(home))?;
+    // Within the user/fixture home, topology events still discover new bin
+    // directories. Missing optional system locations require an explicit scan;
+    // their exact interests remain available if another existing watch sees them.
+    parent
+        .ancestors()
+        .take_while(|ancestor| ancestor.starts_with(home))
+        .find(|ancestor| ancestor.is_dir())
+        .map(Path::to_path_buf)
 }
 
 fn supported_strategy(strategy: &str) -> bool {
@@ -678,6 +827,10 @@ pub fn provider_catalog() -> Vec<BTreeMap<String, String>> {
                 ("name".to_string(), descriptor.name),
             ])
         })
+        .chain(std::iter::once(BTreeMap::from([
+            ("id".to_string(), "mcp_servers".to_string()),
+            ("name".to_string(), "MCP servers".to_string()),
+        ])))
         .collect()
 }
 
@@ -708,6 +861,130 @@ mod tests {
             home,
             ".config/gh/hosts.yml",
             &format!("github.com:\n  user: fixture-user\n  oauth_token: {credential}\n"),
+        );
+    }
+
+    #[test]
+    fn executable_removal_does_not_mark_a_present_account_config_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        github(home, "fixture-credential");
+        let executable = home.join(if cfg!(windows) {
+            ".local/bin/gh.exe"
+        } else {
+            ".local/bin/gh"
+        });
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, "fixture; never execute").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let initial = scan(home, None);
+        assert_eq!(initial.connections.len(), 1);
+        let id = initial.connections[0].connection.id.clone();
+        assert_eq!(
+            initial.connections[0].connection.meta["toolPresence"]["status"],
+            "found"
+        );
+        fs::remove_file(executable).unwrap();
+        for _ in 0..2 {
+            let after = scan(home, None);
+            assert_eq!(after.connections.len(), 1);
+            let row = &after.connections[0].connection;
+            assert_eq!(row.id, id);
+            assert_eq!(
+                row.validation.availability,
+                crate::models::Availability::Available
+            );
+            assert_eq!(row.meta["toolPresence"]["status"], "missing");
+        }
+    }
+
+    #[test]
+    fn scanning_repairs_existing_canonical_and_legacy_duplicate_records() {
+        let dir = tempfile::tempdir().unwrap();
+        github(dir.path(), "fixture-credential");
+        let initial = scan(dir.path(), None);
+        let id = initial.connections[0].connection.id.clone();
+        with_registry_at(dir.path(), |registry| {
+            let mut duplicate = registry.file.connections[0].clone();
+            duplicate.id = "legacy-scope-id".into();
+            duplicate.first_seen = "2020-01-01T00:00:00.000Z".into();
+            duplicate.validation = ConnectionValidation::default();
+            registry.file.connections.push(duplicate.clone());
+            registry.file.connections.push(duplicate);
+        })
+        .unwrap();
+        let repaired = scan(dir.path(), None);
+        assert_eq!(repaired.connections.len(), 1);
+        assert_eq!(repaired.connections[0].connection.id, id);
+        assert_eq!(
+            repaired.connections[0].connection.first_seen,
+            "2020-01-01T00:00:00.000Z"
+        );
+        assert_eq!(
+            repaired.connections[0].connection.validation.availability,
+            crate::models::Availability::Available
+        );
+        assert_eq!(scan(dir.path(), None).connections.len(), 1);
+    }
+
+    #[test]
+    fn mcp_registration_lifecycle_is_integrated_with_persisted_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        write(
+            home,
+            ".cursor/mcp.json",
+            r#"{"mcpServers":{"fixture-server":{"command":"fixture-helper"}}}"#,
+        );
+        let initial = scan(home, None);
+        assert_eq!(initial.connections.len(), 1);
+        let id = initial.connections[0].connection.id.clone();
+        assert_eq!(initial.connections[0].connection.provider, "mcp_servers");
+        assert!(initial.connections[0]
+            .connection
+            .meta
+            .contains_key("toolPresence"));
+        assert_eq!(
+            initial.connections[0].connection.validation.availability,
+            crate::models::Availability::Available
+        );
+        write(home, ".cursor/mcp.json", "{");
+        let unreadable = scan(home, None);
+        assert_eq!(
+            unreadable.connections[0].connection.validation.availability,
+            crate::models::Availability::Unknown
+        );
+        write(home, ".cursor/mcp.json", r#"{"mcpServers":{}}"#);
+        let removed = scan(home, None);
+        assert_eq!(removed.connections[0].connection.id, id);
+        assert_eq!(
+            removed.connections[0].connection.validation.availability,
+            crate::models::Availability::Missing
+        );
+        assert!(removed.connections[0].removable);
+        write(
+            home,
+            ".cursor/mcp.json",
+            r#"{"mcpServers":{"fixture-server":{"url":"https://fixture.invalid/mcp"}}}"#,
+        );
+        let restored = scan(home, None);
+        assert_eq!(restored.connections.len(), 1);
+        assert_eq!(restored.connections[0].connection.id, id);
+        assert!(!restored.connections[0]
+            .connection
+            .meta
+            .contains_key("mcpCommand"));
+        assert!(!restored.connections[0]
+            .connection
+            .meta
+            .contains_key("toolPresence"));
+        assert_eq!(
+            restored.connections[0].connection.validation.availability,
+            crate::models::Availability::Available
         );
     }
 
@@ -1158,6 +1435,46 @@ mod tests {
         let roots = watch_roots_with_paths(home, &paths);
         assert!(!roots.contains(&profile));
         assert!(roots.contains(&profile.parent().unwrap().to_path_buf()));
+    }
+
+    #[test]
+    fn executable_roots_do_not_promote_missing_system_bins_to_broad_ancestors() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("user");
+        let system = fixture.path().join("system");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(&system).unwrap();
+        let optional = system.join("optional/bin/fixture-cli");
+        assert!(executable_watch_root(&optional, Some(&home)).is_none());
+        // An existing immediate bin parent is sufficiently specific.
+        fs::create_dir_all(optional.parent().unwrap()).unwrap();
+        assert_eq!(
+            executable_watch_root(&optional, Some(&home)),
+            Some(optional.parent().unwrap().to_path_buf())
+        );
+        // Reject a filesystem-root parent without inspecting any real files.
+        let filesystem_root = fixture.path().ancestors().last().unwrap();
+        assert!(executable_watch_root(
+            &filesystem_root.join("fixture-cli-never-read"),
+            Some(&home),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn executable_roots_discover_new_bin_directories_only_inside_the_home_boundary() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("user");
+        fs::create_dir(&home).unwrap();
+        let command = home.join(".local/bin/fixture-cli");
+        assert_eq!(
+            executable_watch_root(&command, Some(&home)),
+            Some(home.clone())
+        );
+        let local = home.join(".local");
+        fs::create_dir(&local).unwrap();
+        assert_eq!(executable_watch_root(&command, Some(&home)), Some(local));
+        assert!(executable_watch_root(&command, None).is_none());
     }
 
     #[test]

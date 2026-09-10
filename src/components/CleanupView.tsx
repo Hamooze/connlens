@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { formatTimestamp } from "../lib/format";
 import { useConnLensStore } from "../lib/store";
 import type { CleanupReview } from "../lib/types";
-import { validationCounts } from "../lib/validation";
+import { toolPresenceLabel, toolPresenceOf, validationCounts } from "../lib/validation";
 
 export function CleanupView() {
   const { review, result, loading, executing, error, targetId } = useConnLensStore(useShallow((s) => ({
@@ -33,6 +33,10 @@ function CleanupReviewForm({ review, targetId, executing }: { review: CleanupRev
   const [includeFiles, setIncludeFiles] = useState(false);
   const [files, setFiles] = useState<Set<string>>(() => new Set());
   const counts = validationCounts(review.snapshot.connections);
+  const toolIssues = [...new Map(review.snapshot.connections.flatMap((connection) => {
+    const tool = toolPresenceOf(connection);
+    return tool && tool.status !== "found" ? [[tool.name, { connection, tool }] as const] : [];
+  })).values()];
   const canSelectFile = (fileId: string) => {
     const linked = review.entries.filter((entry) => entry.fileId === fileId);
     return linked.length > 0 && linked.every((entry) => entry.eligible && selected.has(entry.id));
@@ -46,7 +50,8 @@ function CleanupReviewForm({ review, targetId, executing }: { review: CleanupRev
     <div className="cleanup-scroll">
       <h2>Validate & clean up</h2>
       <div className="validation-summary"><span><b>{counts.available}</b> Available</span><span><b>{counts.missing}</b> Missing</span><span><b>{counts.unknown}</b> Unchecked</span></div>
-      <p className="cleanup-note">Checked {formatTimestamp(review.checkedAt)}. Local configuration shows availability and selection; recent use and sign-in validity are not checked.</p>
+      <p className="cleanup-note">Checked {formatTimestamp(review.checkedAt)}. Exact duplicate records are consolidated during validation. Recent use and sign-in validity are not checked.</p>
+      {toolIssues.length ? <><h3>Tool checks</h3><div className="cleanup-items">{toolIssues.map(({ connection, tool }) => <div className="cleanup-item protected" key={tool.name}><span><strong>{tool.name} · {toolPresenceLabel(connection, tool)}</strong><span>{tool.reason}</span><small>A remaining account config or MCP registration stays protected.</small></span></div>)}</div></> : null}
       <h3>Connection history</h3><p className="cleanup-note">Select confirmed-missing entries to remove from ConnLens.</p>
       <div className="cleanup-items">{review.entries.some((entry) => entry.eligible) ? review.entries.filter((entry) => entry.eligible).map((entry) => <label className={`cleanup-item ${entry.eligible ? "" : "protected"}`} key={entry.id}>
         <input type="checkbox" aria-label={`Select ${entry.label}`} checked={selected.has(entry.id)} disabled={!entry.eligible || executing} onChange={(event) => toggleEntry(entry.id, event.currentTarget.checked)} />

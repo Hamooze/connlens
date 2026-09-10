@@ -3,9 +3,11 @@ pub mod cli;
 pub mod commands;
 pub mod credman;
 pub mod descriptors;
+pub mod mcp;
 pub mod models;
 pub mod registry;
 pub mod scan;
+pub mod tool_presence;
 pub mod watchers;
 
 use std::sync::Mutex;

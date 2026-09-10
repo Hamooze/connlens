@@ -76,6 +76,11 @@ button { transition: background 110ms, color 110ms; }
 .connection-row + .connection-row { border-top: 1px solid #ffffff0d; }
 .row-expand-button:hover .identity { color: #fff; }
 .identity { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 450; }
+.identity-wrap { min-width: 0; display: grid; gap: 3px; }
+.identity-context { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #969696; font-size: 9px; }
+.tool-attention { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 7px; color: #f1c36b; font-size: 9px; }
+.tool-attention span { color: #aaa; }
+.row-details .tool-details { border-top: 1px solid #ffffff12; margin-top: 8px; padding-top: 8px; }
 .connection-status { display: flex; align-items: center; flex-shrink: 0; gap: 6px; color: #b2b2b2; font-size: 10px; }
 .status-dot, .watcher { height: 6px; width: 6px; display: inline-block; border-radius: 50%; background: var(--green); flex-shrink: 0; }
 .changed .status-dot, .unverified .status-dot, .watcher.degraded { background: #f1b84e; }

@@ -1,7 +1,7 @@
 use crate::models::{
-    is_retired_provider_id, Availability, ChangeSet, Connection, ConnectionStatus,
-    ConnectionValidation, DetectedConnection, ErrorPayload, Identity, RegisterEntry, RegistryFile,
-    Settings, Snapshot, SnapshotConnection, SourceType, WatcherHealth,
+    is_retired_provider_id, Availability, ChangeSet, Connection, ConnectionSource,
+    ConnectionStatus, ConnectionValidation, DetectedConnection, ErrorPayload, Identity,
+    RegisterEntry, RegistryFile, Settings, Snapshot, SnapshotConnection, SourceType, WatcherHealth,
 };
 use chrono::Utc;
 use serde_json::Value;
@@ -269,16 +269,170 @@ pub fn short_hash(parts: &[&str]) -> String {
 }
 
 pub fn connection_id(detected: &DetectedConnection) -> String {
-    let host = detected.identity.host.as_deref().unwrap_or_default();
-    let source = detected.source.path.as_deref().unwrap_or_default();
-    let scope = detected.identity.scope.as_deref().unwrap_or_default();
-    short_hash(&[
+    record_id(
         &detected.provider,
-        &detected.identity.label,
-        host,
-        source,
-        scope,
+        &detected.identity,
+        &detected.source,
+        &detected.meta,
+    )
+}
+
+fn mcp_registration_id(provider: &str, meta: &BTreeMap<String, Value>) -> Option<String> {
+    if provider != "mcp_servers" {
+        return None;
+    }
+    let digest = meta.get("mcpRegistrationId")?.as_str()?;
+    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| digest.to_ascii_lowercase())
+}
+
+fn record_id(
+    provider: &str,
+    identity: &Identity,
+    source: &ConnectionSource,
+    meta: &BTreeMap<String, Value>,
+) -> String {
+    if let Some(registration) = mcp_registration_id(provider, meta) {
+        return short_hash(&["mcp-registration", &registration]);
+    }
+    identity_source_id(provider, identity, source)
+}
+
+fn identity_source_id(provider: &str, identity: &Identity, source: &ConnectionSource) -> String {
+    short_hash(&[
+        provider,
+        &identity.label,
+        identity.host.as_deref().unwrap_or_default(),
+        source.path.as_deref().unwrap_or_default(),
+        identity.scope.as_deref().unwrap_or_default(),
     ])
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RecordKey {
+    provider: String,
+    label: String,
+    host: Option<String>,
+    scope: Option<String>,
+    source_type: u8,
+    path: Option<String>,
+    descriptor_id: Option<String>,
+    separate_record: Option<String>,
+    registration: Option<String>,
+}
+
+fn record_key(
+    provider: &str,
+    identity: &Identity,
+    source: &ConnectionSource,
+    meta: &BTreeMap<String, Value>,
+    id: &str,
+) -> RecordKey {
+    let source_type = match source.source_type {
+        SourceType::ConfigFile => 0,
+        SourceType::CredentialManager => 1,
+        SourceType::EnvVar => 2,
+        SourceType::Cli => 3,
+        SourceType::AgentRegistered => 4,
+    };
+    // A label or token alone cannot establish identity. Keep the complete source,
+    // host and profile scope in the key, including the descriptor that read it.
+    // Without a source, and for manual entries, only identical stored IDs collapse.
+    let separate_record = (source.path.is_none()
+        || matches!(
+            source.source_type,
+            SourceType::Cli | SourceType::AgentRegistered
+        ))
+    .then(|| id.to_string());
+    let registration = mcp_registration_id(provider, meta);
+    RecordKey {
+        provider: provider.to_string(),
+        // MCP registration identity is source/client/server-key based, so editing
+        // its target URL must update that registration rather than add a copy.
+        label: if registration.is_some() {
+            String::new()
+        } else {
+            identity.label.clone()
+        },
+        host: if registration.is_some() {
+            None
+        } else {
+            identity.host.clone()
+        },
+        scope: if registration.is_some() {
+            None
+        } else {
+            identity.scope.clone()
+        },
+        source_type,
+        path: if registration.is_some() {
+            source.path.as_deref().map(|path| {
+                crate::descriptors::comparable_path(Path::new(path))
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        } else {
+            source.path.clone()
+        },
+        descriptor_id: source.descriptor_id.clone(),
+        separate_record,
+        registration,
+    }
+}
+
+fn merge_record_history(records: &[&Connection], preferred_id: Option<&str>) -> Connection {
+    let preferred = records
+        .iter()
+        .copied()
+        .max_by(|left, right| {
+            let priority = |connection: &Connection| {
+                preferred_id.map_or_else(
+                    || {
+                        connection.id
+                            == record_id(
+                                &connection.provider,
+                                &connection.identity,
+                                &connection.source,
+                                &connection.meta,
+                            )
+                    },
+                    |id| connection.id == id,
+                )
+            };
+            priority(left)
+                .cmp(&priority(right))
+                .then_with(|| left.last_seen.cmp(&right.last_seen))
+                .then_with(|| left.id.cmp(&right.id))
+        })
+        .expect("a reconciliation group is never empty");
+    let mut merged = preferred.clone();
+    let mut history = records.to_vec();
+    history.sort_by(|left, right| {
+        right
+            .last_seen
+            .cmp(&left.last_seen)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    for record in history {
+        merged.first_seen = merged.first_seen.min(record.first_seen.clone());
+        merged.last_seen = merged.last_seen.max(record.last_seen.clone());
+        merged.hidden |= record.hidden;
+        merged.seen &= record.seen;
+        for (key, value) in &record.meta {
+            merged
+                .meta
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+    if records
+        .iter()
+        .any(|record| record.status == ConnectionStatus::Changed && !record.seen)
+    {
+        merged.status = ConnectionStatus::Changed;
+        merged.seen = false;
+    }
+    merged
 }
 
 fn registry_path(home: &Path) -> PathBuf {
@@ -444,14 +598,20 @@ impl Registry {
     ) -> ChangeSet {
         let now = now_iso();
         let mut changes = ChangeSet::default();
-        let mut seen_ids = BTreeSet::new();
-        let old_by_id = self
-            .file
-            .connections
-            .iter()
-            .cloned()
-            .map(|connection| (connection.id.clone(), connection))
-            .collect::<BTreeMap<_, _>>();
+        let mut seen_keys = BTreeSet::new();
+        let mut old_groups = BTreeMap::<RecordKey, Vec<&Connection>>::new();
+        for connection in &self.file.connections {
+            old_groups
+                .entry(record_key(
+                    &connection.provider,
+                    &connection.identity,
+                    &connection.source,
+                    &connection.meta,
+                    &connection.id,
+                ))
+                .or_default()
+                .push(connection);
+        }
         let mut next = Vec::new();
 
         for detected in detected {
@@ -460,21 +620,20 @@ impl Registry {
             }
 
             let id = connection_id(&detected);
-            if !seen_ids.insert(id.clone()) {
+            let key = record_key(
+                &detected.provider,
+                &detected.identity,
+                &detected.source,
+                &detected.meta,
+                &id,
+            );
+            if !seen_keys.insert(key.clone()) {
                 continue;
             }
-            // Preserve history when migrating IDs to include the profile scope.
-            let existing = old_by_id.get(&id).or_else(|| {
-                self.file.connections.iter().find(|existing| {
-                    existing.provider == detected.provider
-                        && existing.identity.label == detected.identity.label
-                        && existing.identity.host == detected.identity.host
-                        && existing.identity.scope == detected.identity.scope
-                        && existing.source == detected.source
-                })
-            });
-            if let Some(existing) = existing {
-                seen_ids.insert(existing.id.clone());
+            // Consume the entire identity/source group, even if its canonical ID
+            // already exists alongside IDs generated by an earlier app version.
+            if let Some(records) = old_groups.remove(&key) {
+                let existing = merge_record_history(&records, Some(&id));
                 let mut updated = existing.clone();
                 updated.id = id.clone();
                 let fingerprint_changed = existing.fingerprint != detected.fingerprint
@@ -485,12 +644,29 @@ impl Registry {
                 updated.provider_name = detected.provider_name;
                 updated.identity = detected.identity;
                 updated.source = detected.source;
-                updated.meta = detected.meta;
-                updated.last_seen = if existing.first_seen > now {
-                    existing.first_seen.clone()
-                } else {
-                    now.clone()
-                };
+                if detected.provider == "mcp_servers" {
+                    // Optional scanner fields disappear when a registration
+                    // changes transport. Keep user metadata, but never revive an
+                    // old command or executable check on an HTTP registration.
+                    updated.meta.retain(|key, _| {
+                        !matches!(
+                            key.as_str(),
+                            "mcpRegistrationId"
+                                | "mcpClient"
+                                | "mcpServerName"
+                                | "mcpTransport"
+                                | "mcpDisabled"
+                                | "mcpCommand"
+                                | "toolPresence"
+                        )
+                    });
+                }
+                updated.meta.extend(detected.meta);
+                updated.last_seen = existing
+                    .last_seen
+                    .clone()
+                    .max(existing.first_seen.clone())
+                    .max(now.clone());
                 updated.fingerprint = detected.fingerprint;
                 updated.status = if fingerprint_changed {
                     updated.seen = false;
@@ -525,32 +701,45 @@ impl Registry {
             }
         }
 
-        for existing in &self.file.connections {
+        for records in old_groups.into_values() {
+            let existing = merge_record_history(&records, None);
             if is_retired_provider_id(&existing.provider) {
                 continue;
             }
-
-            if !seen_ids.contains(&existing.id) {
-                let mut updated = existing.clone();
-                updated.validation = validations.get(&existing.id).cloned().unwrap_or_else(|| {
-                    ConnectionValidation::unknown(
-                        "not_checked",
-                        "This source was not validated in the current scan.",
-                        Some(now.clone()),
-                    )
-                });
-                updated.identity.is_active_identity = false;
-                if updated.validation.availability == Availability::Missing {
-                    if existing.validation.availability != Availability::Missing {
-                        changes.missing.push(updated.id.clone());
-                        updated.seen = false;
-                    }
-                    updated.status = ConnectionStatus::Missing;
-                } else {
-                    updated.status = ConnectionStatus::Unverified;
+            let mut updated = existing.clone();
+            let unknown = || {
+                ConnectionValidation::unknown(
+                    "not_checked",
+                    "This source was not validated in the current scan.",
+                    Some(now.clone()),
+                )
+            };
+            // All copies must have absence evidence before the merged history is
+            // Missing. An unchecked legacy alias must not authorize removal.
+            let checks = records
+                .iter()
+                .map(|record| validations.get(&record.id).cloned().unwrap_or_else(unknown))
+                .collect::<Vec<_>>();
+            updated.validation = checks
+                .iter()
+                .find(|check| check.availability != Availability::Missing)
+                .or_else(|| checks.first())
+                .cloned()
+                .unwrap_or_else(unknown);
+            updated.identity.is_active_identity = false;
+            if updated.validation.availability == Availability::Missing {
+                if records
+                    .iter()
+                    .any(|record| record.validation.availability != Availability::Missing)
+                {
+                    changes.missing.push(updated.id.clone());
+                    updated.seen = false;
                 }
-                next.push(updated);
+                updated.status = ConnectionStatus::Missing;
+            } else {
+                updated.status = ConnectionStatus::Unverified;
             }
+            next.push(updated);
         }
 
         next.sort_by(|a, b| {
@@ -1153,6 +1342,279 @@ mod tests {
             },
             fingerprint: fingerprint.map(str::to_string),
             meta: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn canonical_scan_consumes_all_legacy_copies_and_preserves_user_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let current = detected("alice", "github.com", "fixture/hosts.yml", None);
+        registry.diff(vec![current.clone()], None);
+        let canonical_id = connection_id(&current);
+        registry.file.connections[0].first_seen = "2026-09-09T00:00:00.000Z".into();
+        registry.file.connections[0]
+            .meta
+            .insert("currentFact".into(), Value::String("current".into()));
+        let mut legacy = registry.file.connections[0].clone();
+        legacy.id = "legacy-id-before-scope".into();
+        legacy.first_seen = "2026-01-01T00:00:00.000Z".into();
+        legacy.hidden = true;
+        legacy.seen = false;
+        legacy.validation = ConnectionValidation::default();
+        legacy.meta.insert(
+            "note".into(),
+            Value::String("Keep this account hidden".into()),
+        );
+        registry.file.connections.push(legacy.clone());
+        registry.file.connections.push(legacy);
+        let changes = registry.diff(vec![current.clone()], None);
+        assert!(changes.created.is_empty());
+        assert!(changes.missing.is_empty());
+        assert_eq!(registry.file.connections.len(), 1);
+        let merged = &registry.file.connections[0];
+        assert_eq!(merged.id, canonical_id);
+        assert_eq!(merged.first_seen, "2026-01-01T00:00:00.000Z");
+        assert!(merged.hidden);
+        assert!(!merged.seen);
+        assert_eq!(merged.meta["note"], "Keep this account hidden");
+        assert_eq!(merged.meta["currentFact"], "current");
+        assert_eq!(merged.validation.availability, Availability::Available);
+        registry.save().unwrap();
+        let mut restored = Registry::load(dir.path()).unwrap();
+        restored.diff(vec![current], None);
+        assert_eq!(restored.file.connections.len(), 1);
+        assert!(restored.file.connections[0].hidden);
+    }
+
+    #[test]
+    fn unseen_duplicate_ids_collapse_without_merging_different_accounts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        registry.diff(
+            vec![
+                detected("old-label", "service.test", "fixture/auth.json", None),
+                detected("generic-label", "service.test", "fixture/auth.json", None),
+            ],
+            None,
+        );
+        let original = registry.file.connections.clone();
+        registry.file.connections.extend(original);
+        registry.file.connections[2].hidden = true;
+        registry.file.connections[2].first_seen = "2026-01-01T00:00:00.000Z".into();
+        registry.diff(Vec::new(), None);
+        assert_eq!(registry.file.connections.len(), 2);
+        assert_ne!(
+            registry.file.connections[0].id,
+            registry.file.connections[1].id
+        );
+        assert!(registry
+            .file
+            .connections
+            .iter()
+            .all(|row| row.validation.availability == Availability::Unknown));
+        assert!(registry
+            .file
+            .connections
+            .iter()
+            .any(|row| row.hidden && row.first_seen == "2026-01-01T00:00:00.000Z"));
+        assert_eq!(registry.purge_missing(), 0);
+    }
+
+    #[test]
+    fn reconciliation_retains_profiles_hosts_sources_and_manual_record_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let base = detected(
+            "same-account",
+            "service.test",
+            "fixture/config",
+            Some("sha256:shared"),
+        );
+        let mut scoped = base.clone();
+        scoped.identity.scope = Some("other-profile".into());
+        let mut other_source = base.clone();
+        other_source.source.path = Some("fixture/other-config".into());
+        let mut other_host = base.clone();
+        other_host.identity.host = Some("another.test".into());
+        let input = vec![base, scoped, other_source, other_host];
+        registry.diff(input.clone(), None);
+        for mut row in registry.file.connections.clone() {
+            row.id = format!("legacy-{}", row.id);
+            registry.file.connections.push(row);
+        }
+        registry.diff(input, None);
+        assert_eq!(registry.file.connections.len(), 4);
+        let mut manual = registry.file.connections[0].clone();
+        manual.source.source_type = SourceType::AgentRegistered;
+        manual.id = "manual-one".into();
+        let mut second_manual = manual.clone();
+        second_manual.id = "manual-two".into();
+        registry.file.connections.extend([manual, second_manual]);
+        registry.diff(Vec::new(), None);
+        assert_eq!(
+            registry
+                .file
+                .connections
+                .iter()
+                .filter(|row| row.source.source_type == SourceType::AgentRegistered)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn reconciliation_preserves_token_rotation_and_unacknowledged_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let mut current = detected(
+            "alice",
+            "github.com",
+            "fixture/hosts.yml",
+            Some("sha256:old"),
+        );
+        registry.diff(vec![current.clone()], None);
+        registry.mark_all_seen();
+        let mut legacy = registry.file.connections[0].clone();
+        legacy.id = "legacy-rotation".into();
+        registry.file.connections.push(legacy);
+        current.fingerprint = Some("sha256:new".into());
+        let changes = registry.diff(vec![current.clone()], None);
+        assert_eq!(changes.changed.len(), 1);
+        assert!(changes.created.is_empty());
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Changed
+        );
+        registry.diff(vec![current.clone()], None);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Changed
+        );
+        registry.mark_all_seen();
+        registry.diff(vec![current], None);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Active
+        );
+    }
+
+    #[test]
+    fn reconciled_history_requires_absence_proof_for_every_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        registry.diff(
+            vec![detected("alice", "github.com", "fixture/hosts.yml", None)],
+            None,
+        );
+        let canonical = registry.file.connections[0].id.clone();
+        let mut alias = registry.file.connections[0].clone();
+        alias.id = "legacy-unchecked".into();
+        registry.file.connections.push(alias);
+        let missing = ConnectionValidation::missing(
+            &now_iso(),
+            "source_missing",
+            "Fixture source was absent.",
+        );
+        let proofs = BTreeMap::from([(canonical.clone(), missing.clone())]);
+        registry.diff_with_validation(Vec::new(), None, &proofs);
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections[0].id, canonical);
+        assert_eq!(
+            registry.file.connections[0].validation.availability,
+            Availability::Unknown
+        );
+        assert!(!registry.file.connections[0].removable());
+        registry.diff_with_validation(Vec::new(), None, &BTreeMap::from([(canonical, missing)]));
+        assert_eq!(
+            registry.file.connections[0].validation.availability,
+            Availability::Missing
+        );
+        assert_eq!(registry.purge_missing(), 1);
+    }
+
+    #[test]
+    fn mcp_registration_digest_keeps_one_record_when_target_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let mut first = detected(
+            "fixture-server",
+            "https://first.test",
+            "fixture/mcp.json",
+            Some("sha256:first"),
+        );
+        first.provider = "mcp_servers".into();
+        first.source.descriptor_id = Some("mcp_servers".into());
+        first
+            .meta
+            .insert("mcpRegistrationId".into(), Value::String("a1".repeat(32)));
+        first.meta.insert(
+            "mcpCommand".into(),
+            Value::String("fixture-launcher".into()),
+        );
+        let id = connection_id(&first);
+        registry.diff(vec![first.clone()], None);
+        registry.file.connections[0].hidden = true;
+        registry.file.connections[0].meta.insert(
+            "toolPresence".into(),
+            serde_json::json!({"status": "found"}),
+        );
+        registry.file.connections[0]
+            .meta
+            .insert("note".into(), Value::String("User note".into()));
+        let first_seen = registry.file.connections[0].first_seen.clone();
+        let mut changed = first.clone();
+        changed.identity.host = Some("https://second.test".into());
+        changed.meta.remove("mcpCommand");
+        changed.fingerprint = Some("sha256:second".into());
+        assert_eq!(connection_id(&changed), id);
+        registry.diff(vec![changed], None);
+        assert_eq!(registry.file.connections.len(), 1);
+        assert_eq!(registry.file.connections[0].id, id);
+        assert!(!registry.file.connections[0].meta.contains_key("mcpCommand"));
+        assert!(!registry.file.connections[0]
+            .meta
+            .contains_key("toolPresence"));
+        assert_eq!(registry.file.connections[0].meta["note"], "User note");
+        assert_eq!(
+            registry.file.connections[0].identity.host.as_deref(),
+            Some("https://second.test")
+        );
+        assert_eq!(registry.file.connections[0].first_seen, first_seen);
+        assert!(registry.file.connections[0].hidden);
+        assert_eq!(
+            registry.file.connections[0].status,
+            ConnectionStatus::Changed
+        );
+        let mut another = first;
+        another
+            .meta
+            .insert("mcpRegistrationId".into(), Value::String("b2".repeat(32)));
+        assert_ne!(connection_id(&another), id);
+        registry.diff(vec![another], None);
+        assert_eq!(registry.file.connections.len(), 2);
+    }
+
+    #[test]
+    fn mcp_registration_id_rejects_invalid_digest_and_ignores_other_providers() {
+        let mut row = detected("fixture-server", "service.test", "fixture/mcp.json", None);
+        let ordinary = connection_id(&row);
+        row.meta
+            .insert("mcpRegistrationId".into(), Value::String("ab".repeat(32)));
+        assert_eq!(connection_id(&row), ordinary);
+        row.provider = "mcp_servers".into();
+        let valid = connection_id(&row);
+        row.meta
+            .insert("mcpRegistrationId".into(), Value::String("AB".repeat(32)));
+        assert_eq!(connection_id(&row), valid);
+        for invalid in ["ab".repeat(31), "g".repeat(64), "a".repeat(65)] {
+            row.meta
+                .insert("mcpRegistrationId".into(), Value::String(invalid));
+            assert_eq!(
+                connection_id(&row),
+                identity_source_id(&row.provider, &row.identity, &row.source)
+            );
         }
     }
 

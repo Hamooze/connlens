@@ -129,7 +129,11 @@ fn normalize_event_path(path: &Path) -> PathBuf {
         }
         if let Ok(resolved) = ancestor.canonicalize() {
             if let Ok(suffix) = path.strip_prefix(ancestor) {
-                return resolved.join(suffix);
+                return if suffix.as_os_str().is_empty() {
+                    resolved
+                } else {
+                    resolved.join(suffix)
+                };
             }
         }
     }
@@ -150,22 +154,26 @@ fn contains_glob(path: &Path) -> bool {
 }
 
 fn is_topology_event(kind: &notify::EventKind) -> bool {
-    matches!(
-        kind,
-        notify::EventKind::Any
-            | notify::EventKind::Other
-            | notify::EventKind::Create(
-                notify::event::CreateKind::Folder
-                    | notify::event::CreateKind::Any
-                    | notify::event::CreateKind::Other
-            )
-            | notify::EventKind::Remove(
-                notify::event::RemoveKind::Folder
-                    | notify::event::RemoveKind::Any
-                    | notify::event::RemoveKind::Other
-            )
-            | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
-    )
+    // Linux represents executable symlink replacement as file removal/creation.
+    // Rebuild target watches even when the configured launcher path is unchanged.
+    kind.is_create()
+        || kind.is_remove()
+        || matches!(
+            kind,
+            notify::EventKind::Any
+                | notify::EventKind::Other
+                | notify::EventKind::Create(
+                    notify::event::CreateKind::Folder
+                        | notify::event::CreateKind::Any
+                        | notify::event::CreateKind::Other
+                )
+                | notify::EventKind::Remove(
+                    notify::event::RemoveKind::Folder
+                        | notify::event::RemoveKind::Any
+                        | notify::event::RemoveKind::Other
+                )
+                | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+        )
 }
 
 struct PathInterests {
@@ -319,8 +327,41 @@ fn connections_changed(previous: &Snapshot, next: &Snapshot) -> bool {
                 || old.identity != next.connection.identity
                 || (old.status == ConnectionStatus::Missing)
                     != (next.connection.status == ConnectionStatus::Missing)
+                || old
+                    .meta
+                    .get("toolPresence")
+                    .and_then(|value| value.get("status"))
+                    != next
+                        .connection
+                        .meta
+                        .get("toolPresence")
+                        .and_then(|value| value.get("status"))
         })
     })
+}
+
+fn tool_watch_inventory(snapshot: &Snapshot) -> BTreeSet<(String, String)> {
+    snapshot
+        .connections
+        .iter()
+        .map(|row| {
+            let command = row
+                .connection
+                .meta
+                .get("mcpCommand")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let path = row
+                .connection
+                .meta
+                .get("toolPresence")
+                .and_then(|value| value.get("path"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            (command.to_string(), path.to_string())
+        })
+        .filter(|(command, path)| !command.is_empty() || !path.is_empty())
+        .collect()
 }
 
 fn run(app: AppHandle) {
@@ -330,6 +371,10 @@ fn run(app: AppHandle) {
     let mut watcher = new_watcher(&sender);
     let mut watched = BTreeSet::new();
     let initial = registry::load_snapshot().ok();
+    let mut planned_tools = initial
+        .as_ref()
+        .map(tool_watch_inventory)
+        .unwrap_or_default();
     let mut settings = initial
         .as_ref()
         .map(|snapshot| snapshot.settings.clone())
@@ -390,6 +435,13 @@ fn run(app: AppHandle) {
         };
         let settings_changed = before.settings != settings;
         let scan_settings_changed = scan_settings_changed(&settings, &before.settings);
+        let current_tools = tool_watch_inventory(&before);
+        // A manual/CLI scan may have saved a new launcher path already. Compare
+        // with the installed watch plan, not only two snapshots in this loop.
+        let refresh_plan = pending.refresh_plan
+            || scan_settings_changed
+            || current_tools != planned_tools
+            || fallback;
         let need_scan = pending.config || fallback || scan_settings_changed;
         settings = before.settings.clone();
         // A directory can be removed and recreated within one debounce batch.
@@ -405,9 +457,10 @@ fn run(app: AppHandle) {
             }
             watched.remove(&path);
         }
-        if pending.refresh_plan || scan_settings_changed || fallback {
+        if refresh_plan {
             plan = scan::watch_plan_with_settings(&settings);
             interests = PathInterests::new(&plan, &home, settings.watchers_enabled);
+            planned_tools = current_tools;
         }
         if fallback {
             // Retry native watching before using a timed scan. Polling runs
@@ -416,7 +469,7 @@ fn run(app: AppHandle) {
             watched.clear();
             last_fallback = Instant::now();
             healthy = configure_roots(&mut watcher, &mut watched, &plan, &settings);
-        } else if pending.refresh_plan || scan_settings_changed {
+        } else if refresh_plan {
             healthy = configure_roots(&mut watcher, &mut watched, &plan, &settings) && healthy;
         }
         if pending.failed {
@@ -430,8 +483,22 @@ fn run(app: AppHandle) {
         before.watcher_health = health(settings.watchers_enabled);
         if settings.watchers_enabled && need_scan {
             match commands::rescan_internal(Some(&app), None) {
-                Ok(after) => {
-                    publication.remember(&after);
+                Ok(mut after) => {
+                    let scanned_tools = tool_watch_inventory(&after);
+                    if planned_tools != scanned_tools {
+                        plan = scan::watch_plan_with_settings(&settings);
+                        interests = PathInterests::new(&plan, &home, settings.watchers_enabled);
+                        healthy = configure_roots(&mut watcher, &mut watched, &plan, &settings)
+                            && healthy;
+                        NATIVE_HEALTHY.store(healthy, Ordering::Relaxed);
+                        planned_tools = scanned_tools;
+                    }
+                    if after.watcher_health != health(settings.watchers_enabled) {
+                        after.watcher_health = health(settings.watchers_enabled);
+                        publication.publish(&app, &after);
+                    } else {
+                        publication.remember(&after);
+                    }
                     if notifications_allowed(after.settings.toasts_enabled, isolated)
                         && connections_changed(&before, &after)
                     {
@@ -482,6 +549,59 @@ mod tests {
             )))
             .add_path(path.to_path_buf()),
         )
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn replacing_a_launcher_symlink_refreshes_its_target_interest() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path();
+        let paths = crate::descriptors::ScanPaths::isolated(home);
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let first = home.join("first-helper");
+        let second = home.join("second-helper");
+        std::fs::write(&first, "fixture").unwrap();
+        std::fs::write(&second, "fixture").unwrap();
+        let launcher = bin.join("gh");
+        std::os::unix::fs::symlink(&first, &launcher).unwrap();
+        let make_interests = || {
+            PathInterests::new(
+                &scan::WatchPlan {
+                    roots: vec![bin.clone()],
+                    patterns: crate::tool_presence::watch_candidates("gh", &paths),
+                },
+                home,
+                true,
+            )
+        };
+        let previous = make_interests();
+        let mut pending = PendingChanges::default();
+        pending.add(
+            Ok(
+                Event::new(notify::EventKind::Remove(notify::event::RemoveKind::File))
+                    .add_path(launcher.clone()),
+            ),
+            &previous,
+        );
+        assert!(pending.config && pending.refresh_plan);
+        std::fs::remove_file(&launcher).unwrap();
+        std::os::unix::fs::symlink(&second, &launcher).unwrap();
+        assert!(crate::tool_presence::watch_candidates("gh", &paths).contains(&second));
+        let refreshed = make_interests();
+        assert_eq!(
+            refreshed.classify(&second.canonicalize().unwrap(), true),
+            EventPathKind::Topology
+        );
+        let mut removed_target = PendingChanges::default();
+        removed_target.add(
+            Ok(
+                Event::new(notify::EventKind::Remove(notify::event::RemoveKind::File))
+                    .add_path(second),
+            ),
+            &refreshed,
+        );
+        assert!(removed_target.config);
     }
 
     #[test]
